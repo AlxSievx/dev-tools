@@ -4,7 +4,7 @@
     "id": "DevToolsBridge",
     "author": "dev-tools",
     "description": {
-        "": "Runs jobs from the devtools CLI on 127.0.0.1 (C:\dev-tools)"
+        "": "Runs jobs from the devtools CLI on 127.0.0.1"
     },
     "version": "0.1.0",
     "runOnStartup": true,
