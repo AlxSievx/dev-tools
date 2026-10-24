@@ -22,7 +22,7 @@ def install(repo: Path = REPO, addins_dir: Path | None = None) -> int:
         return 1
     link.parent.mkdir(parents=True, exist_ok=True)
     r = subprocess.run(["cmd", "/c", "mklink", "/J", str(link), str(target)],
-                       capture_output=True, text=True)
+                       capture_output=True, encoding="oem", errors="replace")  # cmd speaks the console code page
     if r.returncode != 0:
         print(f"mklink failed: {r.stdout}{r.stderr}")
         return 1
