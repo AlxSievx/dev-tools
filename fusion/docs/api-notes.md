@@ -247,3 +247,46 @@ right after shows the old view), assign it back, then `vp.fit()` and
 `vp.refresh()`. `vp.saveAsImageFile(path, w, h)` writes a PNG
 (`saveAsImageFileWithOptions` takes a `SaveImageFileOptions` since 2705.x).
 Checked on 2705.1.30.
+
+---
+
+## Gotchas found on real projects
+
+Collected on the Crawler project, Fusion 2705.x, Personal licence.
+
+- **A UI command that opens a dialog freezes the bridge.** `CommandDefinition.execute()`
+  runs asynchronously; if it opens a modal, Fusion's main thread waits for a
+  human and every job stays queued. If the bridge goes silent while Fusion runs,
+  assume a modal is open and ask the user to close it.
+- **`save()` can silently do nothing**: it returns True, `isModified` stays True,
+  the version never moves. Causes seen: the Personal licence's cap of 10 editable
+  documents (check `DataFile.isReadOnly` first), and editing a part that is open
+  as the reference of a parent assembly.
+- **Editing a referenced part:** close every document first (loop
+  `app.documents.item(0).close(False)` — iterating `app.documents` breaks as
+  closing one cascades), then `app.documents.open(dataFile, True)`, edit, save;
+  then reopen the parents and update their references.
+- **References do not auto-update**, and one pass of `getLatestVersion()` is not
+  enough (iterating `documentReferences` while updating skips entries): loop
+  until none reports `isOutOfDate`, parents last.
+- **Version numbers read stale.** `doc.dataFile.versionNumber` can keep the old
+  number after a successful save; re-query `project.rootFolder.dataFiles` and use
+  `latestVersionNumber` of a freshly fetched `DataFile`.
+- **Offline Fusion** (`app.isOffLine`): `rootFolder.dataFiles` raises
+  `InternalValidationError`; setting `isOffLine = False` from a script does
+  nothing. Ask the user to go online.
+- **The sketch Y of `xZConstructionPlane` runs along model −Z**, not +Z.
+- `Occurrence.isSuppressed` and `Sketch.referencePlane` can raise; use
+  `isLightBulbOn` / skip the plane lookup.
+- **Threads:** `ThreadDataQuery.allSizes(type)` returns the tuple directly;
+  `createThreadInfo` takes 4 arguments; sizes are `"3.0"` / `"4.0"`, not `"M3"`.
+  `ThreadFeatureInput.isModeled = False` gives correct thread data without a helix.
+- `occurrences.addNewComponent` also creates an occurrence at the origin; delete
+  that one after placing real instances. Deleting a component's **last**
+  occurrence removes the component.
+- **Material and property names are localized** (a German Fusion has no PLA or
+  PETG): copy `ABS-Kunststoff` with `design.materials.addByCopy(src, name)` and set
+  `Dichte` (kg/m³). Match properties by name, not by index.
+- **Interference volumes:** read `result.interferenceBody.volume`; booleans of the
+  result's entities measure nothing, because they come back in their components'
+  frames.
