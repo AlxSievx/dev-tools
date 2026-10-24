@@ -227,3 +227,21 @@ class CliTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class StallTest(unittest.TestCase):
+    def test_queued_job_that_never_starts_is_reported(self):
+        from devtools.client import Client
+        from devtools.fusion import follow
+        bridge = FakeBridge()
+        bridge.hold.clear()          # the main thread never picks anything up
+        try:
+            client = Client(port=bridge.port, token=TOKEN)
+            _, reply = client.request("POST", "/jobs", {"script": "x"})
+            err = io.StringIO()
+            with contextlib.redirect_stderr(err):
+                code = follow(client, reply["id"], wait_cap=0.6, out=io.StringIO(), stall=0.2)
+            self.assertEqual(code, 4)
+            self.assertIn("not taking jobs", err.getvalue())
+        finally:
+            bridge.close()

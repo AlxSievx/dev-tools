@@ -14,6 +14,7 @@ from devtools.client import BridgeError, Client
 DONE, FAILED, UNKNOWN, STILL_RUNNING, USAGE = 0, 1, 2, 4, 5
 WAIT_CAP = 540.0
 MAX_LINES = 200
+STALL = 15.0      # s a job may sit queued with nothing running before we say so
 
 
 def say(msg: str) -> None:
@@ -21,12 +22,14 @@ def say(msg: str) -> None:
 
 
 def follow(client: Client, job_id: str, wait_cap: float = WAIT_CAP, max_lines: int = MAX_LINES,
-           out=None, poll: float = 0.5) -> int:
+           out=None, poll: float = 0.5, stall: float = STALL) -> int:
     """Stream a job's output until it ends or `wait_cap` seconds pass."""
     out = out or sys.stdout
     since, shown, hidden = 0, 0, 0
     delay = 0.05                       # grows to `poll`: short jobs return fast
-    deadline = time.monotonic() + wait_cap
+    start = time.monotonic()
+    deadline = start + wait_cap
+    warned = False
     while True:
         code, job = client.request("GET", f"/jobs/{job_id}?since={since}")
         if code == 404:
@@ -42,6 +45,11 @@ def follow(client: Client, job_id: str, wait_cap: float = WAIT_CAP, max_lines: i
         out.flush()
         if job["state"] in ("done", "failed", "cancelled"):
             break
+        if (not warned and job["state"] == "queued" and time.monotonic() - start >= stall
+                and client.request("GET", "/health")[1].get("running") is None):
+            warned = True
+            say(f"job {job_id} is still queued and nothing is running: the add-in is not taking "
+                "jobs. Restart DevToolsBridge (Add-Ins → Stop, Run) or Fusion.")
         if time.monotonic() >= deadline:
             say(f"still running: devtools fusion wait {job_id}")
             return STILL_RUNNING

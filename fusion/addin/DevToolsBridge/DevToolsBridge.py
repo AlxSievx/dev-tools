@@ -30,7 +30,8 @@ from devtools_bridge.executor import Session  # noqa: E402
 from devtools_bridge.jobs import JobQueue  # noqa: E402
 from devtools_bridge.server import make_server  # noqa: E402
 
-EVENT_ID = "DevToolsBridgeEvent"
+# per instance: a second copy of the add-in that stops must not unregister ours
+EVENT_ID = f"DevToolsBridgeEvent-{secrets.token_hex(4)}"
 DEFAULT_PORT = 7655
 SECRET_FILE = Path.home() / ".fusion-mcp-secret"
 WORK_DIR = Path(tempfile.gettempdir()) / "devtools" / "fusion"
@@ -145,6 +146,9 @@ def run(context):
     try:
         _queue = JobQueue(WORK_DIR)
         _session = Session(_base, handlers={"shot": _shot}, reload_dt=_reload_dt)
+        port = _port()
+        # bind first: if another copy holds the port, fail before touching Fusion
+        _server = make_server(_queue, _token(), _notify, _status, port=port)
         _event = _app.registerCustomEvent(EVENT_ID)
         step = _StepHandler()
         _event.add(step)
@@ -154,8 +158,6 @@ def run(context):
             ev.add(h)
             _handlers.append((ev, h))
         _document = _app.activeDocument.name if _app.activeDocument else None
-        port = _port()
-        _server = make_server(_queue, _token(), _notify, _status, port=port)
         threading.Thread(target=_server.serve_forever, daemon=True).start()
         log.info("DevToolsBridge running on 127.0.0.1:%d", port)
     except Exception:
