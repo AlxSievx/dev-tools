@@ -119,3 +119,18 @@ class ServerTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PortTest(unittest.TestCase):
+    def test_second_bridge_on_same_port_fails(self):
+        """Windows lets SO_REUSEADDR sockets share a port; two bridges would split the jobs."""
+        from devtools_bridge.jobs import JobQueue
+        from devtools_bridge.server import make_server
+        first = make_server(JobQueue(), TOKEN, lambda: None, dict, port=0)
+        try:
+            port = first.server_address[1]
+            with self.assertRaises(OSError):
+                second = make_server(JobQueue(), TOKEN, lambda: None, dict, port=port)
+                second.server_close()
+        finally:
+            first.server_close()

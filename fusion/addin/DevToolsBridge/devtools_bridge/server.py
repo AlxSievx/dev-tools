@@ -6,6 +6,7 @@ Every request needs `Authorization: Bearer <token>`. Work is only queued here;
 import hmac
 import json
 import re
+import socket
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Callable
 from urllib.parse import parse_qs, urlsplit
@@ -106,6 +107,17 @@ def make_server(queue: JobQueue, token: str, notify: Callable[[], None],
         def do_DELETE(self):
             self._route("DELETE")
 
-    server = ThreadingHTTPServer((host, port), Handler)
+    server = _ExclusiveServer((host, port), Handler)
     server.daemon_threads = True
     return server
+
+
+class _ExclusiveServer(ThreadingHTTPServer):
+    """Owns its port alone. With SO_REUSEADDR (the http.server default) Windows lets
+    a second bridge bind the same port, and the two would split the jobs."""
+    allow_reuse_address = False
+
+    def server_bind(self):
+        if hasattr(socket, "SO_EXCLUSIVEADDRUSE"):
+            self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+        super().server_bind()
