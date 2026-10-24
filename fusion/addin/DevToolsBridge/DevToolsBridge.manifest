@@ -1,0 +1,13 @@
+{
+    "autodeskProduct": "Fusion",
+    "type": "addin",
+    "id": "DevToolsBridge",
+    "author": "dev-tools",
+    "description": {
+        "": "Runs jobs from the devtools CLI on 127.0.0.1 (C:\dev-tools)"
+    },
+    "version": "0.1.0",
+    "runOnStartup": true,
+    "supportedOS": "windows|mac",
+    "editEnabled": true
+}

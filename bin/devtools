@@ -1,0 +1,4 @@
+#!/bin/sh
+# Git Bash shim: Windows Python wants a Windows path and ';' in PYTHONPATH.
+root=$(cygpath -w "$(dirname "$0")/..")
+PYTHONPATH="$root${PYTHONPATH:+;$PYTHONPATH}" exec python -m devtools "$@"
