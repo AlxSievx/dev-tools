@@ -8,9 +8,9 @@
 | `fusion/addin/DevToolsBridge/` | the Fusion add-in; `jobs.py`, `server.py`, `executor.py` do not import `adsk` |
 | `fusion/dt/` | helpers available as `dt` inside every Fusion job |
 | `fusion/CLAUDE.md` | the command card a project imports to work in Fusion |
-| `kicad/` | KiCad tooling, not started |
+| `kicad/` | KiCad tooling: `kt/` helpers (scripts edit the files; no live bridge), `CLAUDE.md` command card, `docs/` |
 | `tools/` | development helpers: `dev_load.py` / `dev_stop.py` (re)load the add-in inside a running Fusion through the old bridge |
-| `tests/` | `python -m unittest discover -s tests -v`; live tests need `DEVTOOLS_LIVE=1` and Fusion open |
+| `tests/` | `python -m unittest discover -s tests -v`; live tests need `DEVTOOLS_LIVE=1` and Fusion open; KiCad tests need KiCad 10 installed (skipped otherwise) |
 | `docs/superpowers/` | design specs and implementation plans — planning lives here |
 
 ## Rules

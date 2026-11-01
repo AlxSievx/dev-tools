@@ -1,16 +1,16 @@
 # dev-tools
 
 Tooling that lets Claude Code design hardware: mechanical parts in
-**Autodesk Fusion** now, electronics in **KiCad 10** later.
+**Autodesk Fusion**, electronics in **KiCad 10**.
 
 Claude works through one command, `devtools`, run from a shell. It writes a
-script file, runs it inside Fusion, measures the result in numbers, looks at
-screenshots, and fixes. No MCP server sits in between.
+script file, runs it (inside Fusion, or on KiCad's files), measures the result
+in numbers, looks at pictures, and fixes. No MCP server sits in between.
 
 | Tool | State | Start with |
 |------|-------|------------|
 | Fusion | in development | [`fusion/CLAUDE.md`](fusion/CLAUDE.md) |
-| KiCad | not started | [`kicad/README.md`](kicad/README.md) |
+| KiCad | in development | [`kicad/CLAUDE.md`](kicad/CLAUDE.md) |
 
 ## How it works with Fusion
 

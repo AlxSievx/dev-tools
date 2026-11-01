@@ -182,8 +182,8 @@ version; the editing tests use KiCad 10 files.
 ## New projects (Claude's call)
 
 `kt` can create a new project: `.kicad_pro`, an empty root schematic and an
-empty board, in the formats KiCad 10 writes for a new project (taken from
-KiCad's own `template/default`).
+empty board, written by `kt` in KiCad 10's format (KiCad 10.0.1 ships no
+`template/default`; the minimal files were checked to load in `kicad-cli`).
 
 ## `kt` (decided shape; exact API left to the builder)
 
