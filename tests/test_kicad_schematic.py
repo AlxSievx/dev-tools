@@ -106,6 +106,118 @@ class SymbolTest(unittest.TestCase):
         self.assertEqual(d.pin("1"), d.pins()["1"])
 
 
+
+def build_demo_circuit(sch):
+    """+5V on J1 -> AMS1117-3.3 (C1 in, C2 out) -> +3V3 -> R1 -> D1 -> GND."""
+    j1 = sch.add_symbol("Connector:Conn_01x02_Pin", "J1", (25.4, 50.8),
+                        footprint="Connector_PinHeader_2.54mm:PinHeader_1x02_P2.54mm_Vertical")
+    u1 = sch.add_symbol("Regulator_Linear:AMS1117-3.3", "U1", (76.2, 50.8))
+    c1 = sch.add_symbol("Device:C", "C1", (55.88, 58.42), value="10u", footprint="Capacitor_SMD:C_0805_2012Metric")
+    c2 = sch.add_symbol("Device:C", "C2", (96.52, 58.42), value="10u", footprint="Capacitor_SMD:C_0805_2012Metric")
+    r1 = sch.add_symbol("Device:R", "R1", (114.3, 58.42), value="330", footprint="Resistor_SMD:R_0603_1608Metric")
+    d1 = sch.add_symbol("Device:LED", "D1", (114.3, 73.66), rot=90, footprint="LED_SMD:LED_0603_1608Metric")
+    # +5V rail: J1 pin 1 -> C1 pin 1 -> U1 VI
+    sch.wire("J1:1", (45.72, 50.8))
+    sch.wire((45.72, 50.8), "U1:VI")
+    sch.wire("C1:1", (55.88, 50.8))
+    # +3V3 rail: U1 VO -> C2 pin 1 -> R1 pin 1
+    sch.wire("U1:VO", (96.52, 50.8))
+    sch.wire((96.52, 50.8), "C2:1")
+    sch.wire((96.52, 50.8), (114.3, 50.8), "R1:1")
+    sch.wire("R1:2", "D1:A")
+    sch.power("+5V", (45.72, 45.72))
+    sch.wire((45.72, 45.72), (45.72, 50.8))
+    sch.power("PWR_FLAG", (40.64, 50.8))
+    sch.wire((40.64, 50.8), (45.72, 50.8))
+    sch.power("+3V3", (106.68, 45.72))
+    sch.wire((106.68, 45.72), (106.68, 50.8))
+    grounds = []
+    for pin in ("J1:2", "U1:GND", "C1:2", "C2:2", "D1:K"):
+        x, y = sch.pin_point(pin)
+        grounds.append(sch.power("GND", (x, y + 7.62)))
+        sch.wire((x, y), grounds[-1].pins()["1"])
+    gx, gy = grounds[0].pins()["1"]
+    flag = sch.power("PWR_FLAG", (gx - 5.08, gy))
+    sch.wire(flag.pins()["1"], (gx, gy))
+    return j1, u1, c1, c2, r1, d1
+
+
+@needs_kicad
+class WiringTest(unittest.TestCase):
+    def setUp(self):
+        self._tmp = TempDir()
+        self.d = self._tmp.__enter__()
+        self.p = new_project(self.d, "t")
+        self.sch = self.p.sch()
+
+    def tearDown(self):
+        self._tmp.__exit__(None, None, None)
+
+    def test_demo_circuit_erc_clean(self):
+        build_demo_circuit(self.sch)
+        result = self.p.save()
+        erc = result.reports[self.p.root_sch]
+        self.assertEqual(erc.errors, [], erc.summary())
+        nets = nets_by_name(self.p.root_sch)
+        r1_d1 = [n for n, nodes in nets.items() if ("R1", "2") in nodes]
+        self.assertEqual(len(r1_d1), 1)
+        self.assertIn(("D1", "2"), nets[r1_d1[0]])
+        self.assertEqual({r for r, _ in nets["+3V3"] if not r.startswith("#")}, {"U1", "C2", "R1"})
+        self.assertIn(("U1", "3"), nets["+5V"])
+        self.assertIn(("J1", "2"), nets["GND"])
+
+    def test_wire_by_pin_names(self):
+        self.sch.add_symbol("Device:R", "R1", (50.8, 50.8))
+        self.sch.add_symbol("Device:LED", "D1", (76.2, 63.5))
+        self.sch.wire("R1:1", "D1:A")
+        self.sch.label("SIG", "R1:1")
+        self.p.save()
+        self.assertEqual(nets_by_name(self.p.root_sch)["SIG"], {("R1", "1"), ("D1", "2")})
+
+    def test_junction_added(self):
+        self.sch.wire((25.4, 25.4), (50.8, 25.4))
+        self.sch.wire((38.1, 25.4), (38.1, 38.1))
+        junctions = [tuple(j.get("at").values()) for j in self.sch.root.all("junction")]
+        self.assertEqual(junctions, [(38.1, 25.4)])
+        self.sch.wire((25.4, 25.4), (25.4, 12.7))   # a corner: two ends, no junction
+        self.assertEqual(len(self.sch.root.all("junction")), 1)
+
+    def test_labels_and_no_connect(self):
+        r = self.sch.add_symbol("Device:R", "R1", (50.8, 50.8))
+        self.sch.label("A", "R1:1", kind="global")
+        self.sch.label("B", "R1:2", kind="hierarchical")
+        self.sch.no_connect((76.2, 76.2))
+        heads = [n.head for n in self.sch.root.all()]
+        for h in ("global_label", "hierarchical_label", "no_connect"):
+            self.assertIn(h, heads)
+        self.p.save()  # loads in kicad-cli
+
+    def test_move_rotate_delete_set_field(self):
+        r = self.sch.add_symbol("Device:R", "R1", (50.8, 50.8))
+        self.sch.add_symbol("Device:R", "R2", (76.2, 50.8))
+        self.sch.move("R1", (63.5, 63.5))
+        self.assertEqual(self.sch.symbol("R1").at, (63.5, 63.5))
+        self.sch.rotate("R1", 90)
+        self.assertEqual(self.sch.symbol("R1").rot, 90)
+        self.sch.label("X", "R1:1")
+        self.sch.symbol("R1").set_field("Value", "4k7")
+        self.sch.symbol("R1").set_field("MPN", "ABC")
+        self.p.save()
+        nets = nets_by_name(self.p.root_sch)
+        self.assertEqual(nets["X"], {("R1", "1")})
+        sch = self.p.sch()
+        self.assertEqual(sch.symbol("R1").fields()["MPN"], "ABC")
+        sch.delete("R1")
+        self.assertEqual([s[0] for s in sch.root.get("lib_symbols").all("symbol")], ["Device:R"])
+        sch.delete("R2")
+        self.assertEqual(sch.root.get("lib_symbols").all("symbol"), [])
+        self.p.save()
+        self.assertNotIn("R1", {r for nodes in nets_by_name(self.p.root_sch).values() for r, _ in nodes})
+
+    def test_wire_off_grid(self):
+        with self.assertRaises(ValueError):
+            self.sch.wire((25.4, 25.4), (25.0, 30.48))
+
 @needs_kicad
 class SubsheetTest(unittest.TestCase):
     def test_subsheet_instances(self):

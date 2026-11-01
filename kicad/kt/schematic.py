@@ -8,7 +8,7 @@ import re
 import uuid as _uuid
 from pathlib import Path
 
-from kt.geometry import require_grid, sch_transform
+from kt.geometry import require_grid, rotate_screen, sch_transform
 from kt.project import DOCUMENT_TYPES, Document
 from kt.sexpr import Node, Sym
 
@@ -31,6 +31,38 @@ def unit_of(unit_name: str) -> tuple[int, int]:
     """'LM2904_2_1' -> (2, 1): unit number and body style."""
     parts = unit_name.rsplit("_", 2)
     return int(parts[1]), int(parts[2])
+
+
+def _new_field(name: str, value: str, x: float, y: float) -> Node:
+    return Node("property", name, value, Node("at", x, y, 0), Node("hide", Sym("yes")),
+                Node("show_name", Sym("no")), Node("do_not_autoplace", Sym("no")),
+                Node("effects", Node("font", Node("size", 1.27, 1.27))))
+
+
+def _font(justify: tuple = ()) -> Node:
+    eff = Node("effects", Node("font", Node("size", 1.27, 1.27)))
+    if justify:
+        eff.append(Node("justify", *(Sym(j) for j in justify)))
+    return eff
+
+
+def _pt(p) -> tuple[float, float]:
+    return (round(float(p[0]), 4), round(float(p[1]), 4))
+
+
+def _wire(a, b) -> Node:
+    return Node("wire", Node("pts", Node("xy", a[0], a[1]), Node("xy", b[0], b[1])),
+                Node("stroke", Node("width", 0), Node("type", Sym("default"))),
+                Node("uuid", new_uuid()))
+
+
+def _interior(p, a, b) -> bool:
+    """`p` lies strictly inside the axis-parallel segment a–b."""
+    if a[0] == b[0] == p[0]:
+        return min(a[1], b[1]) < p[1] < max(a[1], b[1])
+    if a[1] == b[1] == p[1]:
+        return min(a[0], b[0]) < p[0] < max(a[0], b[0])
+    return False
 
 
 def sheet_tree(project) -> dict[Path, list[str]]:
@@ -115,6 +147,24 @@ class PlacedSymbol:
             at = pin.get("at")
             out[pin.get("number")[0]] = f(at[0], at[1])
         return out
+
+    def set_field(self, name: str, value: str) -> None:
+        p = _prop(self.node, name)
+        if p is None:
+            x, y = self.at
+            self.node.insert(self._last_property_index(), _new_field(name, value, x, y))
+        else:
+            p.set(1, value)
+        if name == "Reference":
+            for r in [n for n in self.node.walk() if n.head == "reference"]:
+                r.set(0, value)
+
+    def _last_property_index(self) -> int:
+        idx = 0
+        for i, item in enumerate(self.node.items):
+            if isinstance(item, Node) and item.head == "property":
+                idx = i + 1
+        return idx
 
     def pin(self, key: str) -> tuple[float, float]:
         """A pin's sheet point, by number or (if unique) by name."""
@@ -236,10 +286,8 @@ class Schematic(Document):
         for name, val in (fields or {}).items():
             if _prop(node, name) is not None:
                 _prop(node, name).set(1, val)
-                continue
-            node.append(Node("property", name, val, Node("at", x, y, 0), Node("hide", Sym("yes")),
-                             Node("show_name", Sym("no")), Node("do_not_autoplace", Sym("no")),
-                             Node("effects", Node("font", Node("size", 1.27, 1.27)))))
+            else:
+                node.append(_new_field(name, val, x, y))
         placed = PlacedSymbol(self, node)
         numbers = [p.get("number")[0] for p in placed._lib_pins()]
         for n in dict.fromkeys(numbers):
@@ -249,7 +297,144 @@ class Schematic(Document):
             proj.append(Node("path", path, Node("reference", ref), Node("unit", unit)))
         node.append(Node("instances", proj))
         self._insert_item(node)
+        self.junctions_fix()
         return placed
+
+    # ---- connections
+    def pin_point(self, spec) -> tuple[float, float]:
+        """`(x, y)` as given, or `"REF:PIN"` (pin number or unique name, any unit)."""
+        if not isinstance(spec, str):
+            return _pt(spec)
+        ref, sep, pin = spec.partition(":")
+        if not sep:
+            raise ValueError(f"{spec!r}: a point is (x, y) or 'REF:PIN'")
+        units = [s for s in self.symbols() if s.ref == ref]
+        if not units:
+            raise KeyError(f"no symbol {ref} on {self.path.name}")
+        errors = []
+        for s in units:
+            try:
+                return s.pin(pin)
+            except KeyError as e:
+                errors.append(str(e))
+        raise KeyError(errors[0])
+
+    def wire(self, *points, via: str = "hv") -> list[Node]:
+        """Wires through `points`, with orthogonal bends (`hv`: horizontal first)."""
+        if via not in ("hv", "vh"):
+            raise ValueError("via must be 'hv' or 'vh'")
+        pts = [self.pin_point(p) for p in points]
+        if len(pts) < 2:
+            raise ValueError("a wire needs two points")
+        require_grid(*pts, what="wire point")
+        path = [pts[0]]
+        for b in pts[1:]:
+            a = path[-1]
+            if a[0] != b[0] and a[1] != b[1]:
+                path.append((b[0], a[1]) if via == "hv" else (a[0], b[1]))
+            path.append(b)
+        nodes = [self._insert_item(_wire(a, b)) for a, b in zip(path, path[1:]) if a != b]
+        self.junctions_fix()
+        return nodes
+
+    def _segments(self) -> list[tuple]:
+        out = []
+        for w in self.root.all("wire"):
+            xy = w.get("pts").all("xy")
+            out.append((_pt(xy[0].values()), _pt(xy[1].values())))
+        return out
+
+    def junctions_fix(self) -> list[Node]:
+        """Add a junction wherever three or more wire ends, wire middles or pins meet."""
+        segs = self._segments()
+        pins = [p for s in self.symbols() for p in s.pins().values()]
+        have = {_pt(j.get("at").values()) for j in self.root.all("junction")}
+        candidates = {p for s in segs for p in s} | set(pins)
+        added = []
+        for p in sorted(candidates):
+            if p in have:
+                continue
+            ends = sum(1 for a, b in segs for q in (a, b) if q == p)
+            if ends == 0:
+                continue
+            count = ends + pins.count(p) + 2 * sum(1 for a, b in segs if _interior(p, a, b))
+            if count >= 3:
+                added.append(self._insert_item(Node(
+                    "junction", Node("at", p[0], p[1]), Node("diameter", 0),
+                    Node("color", 0, 0, 0, 0), Node("uuid", new_uuid()))))
+        return added
+
+    def label(self, name: str, at, rot: int = 0, kind: str = "local", shape: str = "bidirectional") -> Node:
+        """A net label at a point or pin. `kind`: local, global or hierarchical."""
+        x, y = self.pin_point(at)
+        require_grid((x, y), what=f"label {name}")
+        right = rot in (180, 270)
+        if kind == "local":
+            node = Node("label", name, Node("at", x, y, rot),
+                        _font(("right" if right else "left", "bottom")), Node("uuid", new_uuid()))
+        elif kind == "global":
+            node = Node("global_label", name, Node("shape", Sym(shape)), Node("at", x, y, rot),
+                        Node("fields_autoplaced", Sym("yes")), _font(("right" if right else "left",)),
+                        Node("uuid", new_uuid()),
+                        Node("property", "Intersheetrefs", "${INTERSHEET_REFS}", Node("at", x, y, 0),
+                             Node("effects", Node("font", Node("size", 1.27, 1.27)),
+                                  Node("justify", Sym("left")), Node("hide", Sym("yes")))))
+        elif kind == "hierarchical":
+            node = Node("hierarchical_label", name, Node("shape", Sym(shape)), Node("at", x, y, rot),
+                        _font(("right" if right else "left",)), Node("uuid", new_uuid()))
+        else:
+            raise ValueError("kind must be 'local', 'global' or 'hierarchical'")
+        return self._insert_item(node)
+
+    def power(self, name: str, at, rot: int = 0) -> PlacedSymbol:
+        """A power symbol (`power:<name>`, e.g. GND, +3V3, PWR_FLAG) whose pin sits at `at`."""
+        prefix = "#FLG" if name == "PWR_FLAG" else "#PWR"
+        return self.add_symbol(f"power:{name}", self.next_ref(prefix), self.pin_point(at), rot=rot)
+
+    def no_connect(self, at) -> Node:
+        x, y = self.pin_point(at)
+        require_grid((x, y), what="no-connect flag")
+        return self._insert_item(Node("no_connect", Node("at", x, y), Node("uuid", new_uuid())))
+
+    # ---- edits
+    def move(self, ref: str, at, unit: int | None = None) -> None:
+        """Move a symbol (with its fields). Wires stay where they are."""
+        require_grid(tuple(at), what=f"{ref} position")
+        s = self.symbol(ref, unit)
+        dx, dy = at[0] - s.at[0], at[1] - s.at[1]
+        for n in [s.node.get("at")] + [p.get("at") for p in s.node.all("property")]:
+            n.set(0, round(n[0] + dx, 4))
+            n.set(1, round(n[1] + dy, 4))
+
+    def rotate(self, ref: str, rot: int, unit: int | None = None) -> None:
+        if rot not in (0, 90, 180, 270):
+            raise ValueError(f"rot must be 0, 90, 180 or 270, not {rot}")
+        s = self.symbol(ref, unit)
+        delta = (rot - s.rot) % 360
+        cx, cy = s.at
+        a = s.node.get("at")
+        if len(a) > 2:
+            a.set(2, rot)
+        else:
+            a.append(rot)
+        for p in s.node.all("property"):
+            pa = p.get("at")
+            dx, dy = rotate_screen(pa[0] - cx, pa[1] - cy, delta)
+            angle = ((pa[2] if len(pa) > 2 else 0) + delta) % 180
+            p.replace(pa, Node("at", round(cx + dx, 4), round(cy + dy, 4), angle))
+
+    def delete(self, ref: str) -> int:
+        """Remove every unit of `ref` (wires and labels stay). Returns how many were removed."""
+        doomed = [s for s in self.symbols() if s.ref == ref]
+        if not doomed:
+            raise KeyError(f"no symbol {ref} on {self.path.name}")
+        for s in doomed:
+            self.root.remove(s.node)
+        used = {s.lib_id for s in self.symbols()}
+        for lib in self.lib_symbols.all("symbol"):
+            if lib[0] not in used:
+                self.lib_symbols.remove(lib)
+        return len(doomed)
 
 
 DOCUMENT_TYPES[".kicad_sch"] = Schematic
