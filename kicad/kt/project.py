@@ -163,6 +163,16 @@ class Project:
             self._libs = LibTables(self)
         return self._libs
 
+    def sch(self, name=None):
+        """The root schematic, or the sheet file `name` (relative to the project dir)."""
+        import kt.schematic  # noqa: F401  registers the Schematic document type
+        return self.document(name or self.root_sch)
+
+    def sheets(self) -> list:
+        """Every schematic sheet reachable from the root, root first."""
+        from kt.schematic import sheet_tree
+        return [self.document(p) for p in sheet_tree(self)]
+
     def document(self, path, root: Node | None = None) -> Document:
         """The document at `path` (relative to the project dir), loaded once.
 
