@@ -10,3 +10,4 @@ from kt.libs import LibTables, register_library
 from kt.schematic import PlacedSymbol, Schematic
 from kt.board import Board, PlacedFootprint
 from kt.info import info
+from kt.parts import Footprint, FootprintLib, Symbol, SymbolLib

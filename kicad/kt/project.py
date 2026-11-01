@@ -173,6 +173,16 @@ class Project:
         from kt.schematic import sheet_tree
         return [self.document(p) for p in sheet_tree(self)]
 
+    def footprint_lib(self, path):
+        """A footprint library folder (`.pretty`), inside the project or anywhere else."""
+        from kt.parts import FootprintLib
+        return FootprintLib(self, path)
+
+    def symbol_lib(self, path):
+        """A symbol library file (`.kicad_sym`), created on save if missing."""
+        import kt.parts  # noqa: F401  registers the SymbolLib document type
+        return self.document(path)
+
     def document(self, path, root: Node | None = None) -> Document:
         """The document at `path` (relative to the project dir), loaded once.
 
