@@ -1,6 +1,6 @@
-"""Boards: read footprints and the outline.
+"""Boards: footprints (read, move, rotate, flip, lock), the outline, extra library footprints.
 
-Placement helpers (move, rotate, flip, outline, adding library footprints) follow in this module.
+Footprints of schematic parts reach the board through F8 in KiCad; kt places them.
 """
 import uuid as _uuid
 
@@ -67,6 +67,63 @@ class PlacedFootprint:
         attr = self.node.get("attr")
         return attr is not None and "board_only" in [str(v) for v in attr.values()]
 
+    def pad_list(self) -> list[tuple[str, float, float, str]]:
+        """Every pad: (number, x, y, net) on the board."""
+        out = []
+        for pad in self.node.all("pad"):
+            at = pad.get("at")
+            x, y = pcb_point(self.at, self.rot, (at[0], at[1]))
+            net = pad.get("net")
+            out.append((pad[0], round(x, 4), round(y, 4), net[-1] if net is not None else ""))
+        return out
+
+    # ---- placing
+    def move(self, x: float, y: float) -> None:
+        at = self.node.get("at")
+        at.set(0, x)
+        at.set(1, y)
+
+    def rotate_to(self, deg: float) -> None:
+        """Set the footprint's rotation (degrees, counter-clockwise on screen)."""
+        deg = _angle(deg)
+        delta = deg - self.rot
+        at = self.node.get("at")
+        self.node.replace(at, Node("at", at[0], at[1], deg) if deg else Node("at", at[0], at[1]))
+        _turn_angles(self.node, delta)
+
+    def flip(self) -> None:
+        """Move to the other side, mirrored top-to-bottom about the footprint's origin, as KiCad's flip."""
+        at = self.node.get("at")
+        new_rot = _angle(-self.rot)
+        for item in self.node.walk():
+            if item is self.node or item is at:
+                continue
+            if item.head in ("at", "start", "end", "mid", "center", "xy") and len(item) >= 2                     and isinstance(item[1], (int, float)) and not _in_model(item):
+                item.set(1, -item[1] if item[1] else 0)
+            elif item.head == "layer" and isinstance(item[0], str):
+                item.set(0, _other_side(item[0]))
+            elif item.head == "layers":
+                for i, v in enumerate(item.values()):
+                    if isinstance(v, str) and _other_side(v) != v:
+                        item.set(i, _other_side(v))
+        for item in self.node.all():
+            if item.head in ANGLED:
+                a = item.get("at")
+                if a is not None and len(a) > 2:
+                    a.set(2, _angle(-a[2]))
+            if item.head in ("property", "fp_text"):
+                _toggle_mirror(item)
+        self.node.replace(at, Node("at", at[0], at[1], new_rot) if new_rot else Node("at", at[0], at[1]))
+
+    def lock(self, on: bool = True) -> None:
+        lk = self.node.get("locked")
+        if on and lk is None:
+            self.node.insert(1, Node("locked", Sym("yes")))
+        elif on:
+            lk.set(0, Sym("yes")) if len(lk) else lk.append(Sym("yes"))
+        elif lk is not None:
+            self.node.remove(lk)
+
     def pads(self) -> dict[str, tuple[float, float, str]]:
         """Pad number -> (x, y, net) on the board. Pads sharing a number: the first one."""
         out = {}
@@ -108,6 +165,45 @@ class Board(Document):
         xs, ys = [p[0] for p in pts], [p[1] for p in pts]
         return (min(xs), min(ys), max(xs), max(ys))
 
+
+    # ---- outline
+    def _clear_outline(self) -> None:
+        for g in self.edge_items():
+            self.root.remove(g)
+
+    def _insert_graphic(self, node: Node) -> Node:
+        idx = next((i for i, it in enumerate(self.root.items)
+                    if isinstance(it, Node) and it.head == "embedded_fonts"), len(self.root.items))
+        return self.root.insert(idx, node)
+
+    def outline_rect(self, x: float, y: float, w: float, h: float, r: float = 0) -> None:
+        """Replace the board outline with a rectangle (corner radius `r`)."""
+        if w <= 0 or h <= 0 or r < 0 or 2 * r > min(w, h):
+            raise ValueError(f"bad outline {w}×{h} r={r}")
+        self._clear_outline()
+        x1, y1 = x + w, y + h
+        if not r:
+            self._insert_graphic(_gr("gr_rect", Node("start", x, y), Node("end", x1, y1), fill=False))
+            return
+        k = r * (1 - 0.5 ** 0.5)       # arc midpoint inset from the corner
+        rd = lambda v: round(v, 6)
+        for a, b in (((x + r, y), (x1 - r, y)), ((x1, y + r), (x1, y1 - r)),
+                     ((x1 - r, y1), (x + r, y1)), ((x, y1 - r), (x, y + r))):
+            self._insert_graphic(_gr("gr_line", Node("start", *a), Node("end", *b)))
+        for s, m, e in (((x, y + r), (x + k, y + k), (x + r, y)),
+                        ((x1 - r, y), (x1 - k, y + k), (x1, y + r)),
+                        ((x1, y1 - r), (x1 - k, y1 - k), (x1 - r, y1)),
+                        ((x + r, y1), (x + k, y1 - k), (x, y1 - r))):
+            self._insert_graphic(_gr("gr_arc", Node("start", *s), Node("mid", rd(m[0]), rd(m[1])),
+                                     Node("end", *e)))
+
+    def outline_polygon(self, points) -> None:
+        """Replace the board outline with a closed polygon through `points`."""
+        if len(points) < 3:
+            raise ValueError("an outline polygon needs three points or more")
+        self._clear_outline()
+        pts = Node("pts", *(Node("xy", p[0], p[1]) for p in points))
+        self._insert_graphic(_gr("gr_poly", pts, fill=False))
 
     def _insert_footprint(self, node: Node) -> Node:
         items = self.root.items
@@ -152,6 +248,55 @@ class Board(Document):
                 attr.append(Sym("board_only"))
         self._insert_footprint(node)
         return PlacedFootprint(self, node)
+
+
+def _angle(a: float):
+    a = a % 360
+    return int(a) if float(a).is_integer() else round(a, 6)
+
+
+def _other_side(layer: str) -> str:
+    if layer.startswith("F."):
+        return "B." + layer[2:]
+    if layer.startswith("B."):
+        return "F." + layer[2:]
+    return layer
+
+
+def _in_model(node: Node) -> bool:
+    n = node.parent
+    while n is not None:
+        if n.head == "model":
+            return True
+        n = n.parent
+    return False
+
+
+def _toggle_mirror(item: Node) -> None:
+    eff = item.get("effects")
+    if eff is None:
+        return
+    j = eff.get("justify")
+    if j is None:
+        eff.append(Node("justify", Sym("mirror")))
+        return
+    vals = [str(v) for v in j.values()]
+    if "mirror" in vals:
+        if len(vals) == 1:
+            eff.remove(j)
+        else:
+            eff.replace(j, Node("justify", *(Sym(v) for v in vals if v != "mirror")))
+    else:
+        j.append(Sym("mirror"))
+
+
+def _gr(head: str, *geometry, fill: bool | None = None) -> Node:
+    node = Node(head, *geometry, Node("stroke", Node("width", 0.05), Node("type", Sym("default"))))
+    if fill is not None:
+        node.append(Node("fill", Sym("yes" if fill else "no")))
+    node.append(Node("layer", "Edge.Cuts"))
+    node.append(Node("uuid", str(_uuid.uuid4())))
+    return node
 
 
 def _turn_angles(fp: Node, delta: float) -> None:

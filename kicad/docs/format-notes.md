@@ -47,3 +47,19 @@ and board up (`kicad-cli sch|pcb upgrade --force`).
 - Sheets: a `(sheet …)` node names its file in property `Sheetfile`; a symbol on
   that sheet has instance path `<parent path>/<sheet uuid>`.
 - Root `sheet_instances` and `embedded_fonts` come last; new items go before them.
+
+## Board
+
+- A footprint's `(at x y rot)` is on the board; its pads, texts and graphics are
+  in footprint-local coordinates (rotate by `rot`, counter-clockwise on screen, then add `at`).
+- Pad and text angles are stored **absolute** (local angle + footprint rotation):
+  turning a footprint means adding the change to every pad/property/fp_text angle.
+- Pads carry their net by name: `(net "GND")`.
+- Locked: `(locked yes)` right after the footprint name.
+- Back side (as KiCad's flip): layer `B.Cu`, every local y negated (graphics,
+  pads, texts; not the 3D model), rotation negated, `F.*` ↔ `B.*`, texts get
+  `(justify mirror)`. Checked with IPC-D-356 pad positions and a bottom render.
+- A board outline is any `gr_*` on `Edge.Cuts`; DRC reports `invalid_outline` without one.
+- Footprints added on the board only carry `(attr … board_only)` so schematic parity ignores them.
+- A library `.kicad_mod` becomes a board footprint by dropping `version` /
+  `generator` / `generator_version`, naming it `Lib:Name`, and adding `uuid` and `at` after `layer`.
