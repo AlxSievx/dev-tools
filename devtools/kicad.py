@@ -19,7 +19,7 @@ if str(KICAD_DIR) not in sys.path:
 
 import kt  # noqa: E402
 from kt import cli  # noqa: E402
-from kt.project import VERSIONS, FormatError, LockedError, RejectedError, locked  # noqa: E402
+from kt.project import VERSIONS, FormatError, LockedError, RejectedError, WriteError, locked  # noqa: E402
 
 DONE, FAILED, NO_CLI, USAGE, LOCKED = 0, 1, 2, 5, 6
 MAX_LINES = 200
@@ -98,6 +98,13 @@ def execute(source: str, filename: str, project, echo_last: bool) -> int:
             value = eval(last, ns)
             if value is not None:
                 print(repr(value))
+    except SystemExit as e:
+        sys.stdout = real
+        out.close()
+        if e.code in (None, 0):
+            return DONE
+        say(f"script called sys.exit({e.code!r}): nothing written")
+        return FAILED
     except Exception:
         sys.stdout = real
         out.close()
@@ -200,7 +207,7 @@ def project_files(project) -> list[Path]:
 
 def cmd_locks(args) -> int:
     project = open_project(args.project)
-    open_files = [p for p in project_files(project) if not p.name.startswith("~") and locked(p)]
+    open_files = [p for p in project_files(project) if not p.name.startswith("~") and project.is_locked(p)]
     if not open_files:
         print("no files open in KiCad")
     for p in open_files:
@@ -216,18 +223,31 @@ def _version(path: Path):
 
 def cmd_upgrade(args) -> int:
     project = open_project(args.project)
-    kinds = {".kicad_sch": ("sch", VERSIONS["kicad_sch"]), ".kicad_pcb": ("pcb", VERSIONS["kicad_pcb"])}
-    files = [p for p in project_files(project) if p.suffix in kinds]
-    busy = [p for p in files if locked(p)]
+    kinds = {".kicad_sch": ("sch", VERSIONS["kicad_sch"]), ".kicad_pcb": ("pcb", VERSIONS["kicad_pcb"]),
+             ".kicad_sym": ("sym", VERSIONS["kicad_symbol_lib"])}
+    files = [p for p in project_files(project) if p.suffix in (".kicad_sch", ".kicad_pcb")]
+    libs = [Path(x).resolve() for x in args.lib or []]
+    for lib in libs:
+        if not (lib.suffix == ".kicad_sym" and lib.is_file() or lib.suffix == ".pretty" and lib.is_dir()):
+            raise Usage(f"--lib wants a .kicad_sym file or a .pretty folder, not {lib}")
+    lib_files = [lib for lib in libs if lib.is_file()] + [f for lib in libs if lib.is_dir()
+                                                          for f in lib.glob("*.kicad_mod")]
+    busy = [p for p in files + lib_files if project.is_locked(p)]
     if busy:
         raise LockedError(busy)
-    for p in files:
+    for p in files + [lib for lib in libs if lib.is_file()]:
         tool, want = kinds[p.suffix]
         have = _version(p)
         if have == want:
             continue
         cli.run(tool, "upgrade", "--force", p, input_file=p)
         print(f"upgraded {p} ({have} → {_version(p)})")
+    for lib in libs:
+        if lib.is_dir():
+            old = [f for f in lib.glob("*.kicad_mod") if _version(f) != VERSIONS["footprint"]]
+            if old:
+                cli.run("fp", "upgrade", "--force", lib, input_file=lib)
+                print(f"upgraded {lib} ({len(old)} footprints)")
     return DONE
 
 
@@ -244,7 +264,7 @@ def _guard(func):
         except LockedError as e:
             say(str(e))
             return LOCKED
-        except (RejectedError, FormatError, cli.LoadError) as e:
+        except (RejectedError, FormatError, cli.LoadError, WriteError) as e:
             say(str(e))
             return FAILED
     return run
@@ -283,4 +303,5 @@ def add_parser(tools) -> None:
     c.add_argument("--size", default="1600x1000", help="pcb renders: WxH in pixels")
     add("info", cmd_info, "the project in numbers: symbols, nets, footprints, in step with the board, checks")
     add("locks", cmd_locks, "which project files are open in KiCad right now")
-    add("upgrade", cmd_upgrade, "bring schematic and board files to KiCad 10's current format")
+    c = add("upgrade", cmd_upgrade, "bring schematic, board (and --lib libraries) to KiCad 10's current format")
+    c.add_argument("--lib", action="append", metavar="PATH", help="a .kicad_sym file or .pretty folder (repeatable)")

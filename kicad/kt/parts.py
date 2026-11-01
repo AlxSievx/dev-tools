@@ -315,11 +315,11 @@ class FootprintLib:
         loaded = path.resolve() in {p.resolve() for p in self.project._docs}
         if (path.exists() or loaded) and not replace:
             raise FileExistsError(f"{path.name} is already in {self.path.name}; pass replace=True")
-        if path.exists() or loaded:
+        if loaded:
             doc = self.project.document(path)
             doc.root = node
             doc.new = True
-        else:
+        else:                     # an existing file is replaced without reading it
             self.project.document(path, root=node)
         return node
 

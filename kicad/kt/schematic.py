@@ -297,7 +297,7 @@ class Schematic(Document):
             proj.append(Node("path", path, Node("reference", ref), Node("unit", unit)))
         node.append(Node("instances", proj))
         self._insert_item(node)
-        self.junctions_fix()
+        self.junctions_fix(placed.pins().values())
         return placed
 
     # ---- connections
@@ -334,7 +334,7 @@ class Schematic(Document):
                 path.append((b[0], a[1]) if via == "hv" else (a[0], b[1]))
             path.append(b)
         nodes = [self._insert_item(_wire(a, b)) for a, b in zip(path, path[1:]) if a != b]
-        self.junctions_fix()
+        self.junctions_fix(path)
         return nodes
 
     def _segments(self) -> list[tuple]:
@@ -344,12 +344,18 @@ class Schematic(Document):
             out.append((_pt(xy[0].values()), _pt(xy[1].values())))
         return out
 
-    def junctions_fix(self) -> list[Node]:
-        """Add a junction wherever three or more wire ends, wire middles or pins meet."""
+    def junctions_fix(self, points=None) -> list[Node]:
+        """Add a junction wherever three or more wire ends, wire middles or pins meet.
+
+        With `points`, only there — the helpers pass what they just drew, so a
+        T the user left open elsewhere stays open.
+        """
         segs = self._segments()
         pins = [p for s in self.symbols() for p in s.pins().values()]
         have = {_pt(j.get("at").values()) for j in self.root.all("junction")}
         candidates = {p for s in segs for p in s} | set(pins)
+        if points is not None:
+            candidates &= {_pt(p) for p in points}
         added = []
         for p in sorted(candidates):
             if p in have:

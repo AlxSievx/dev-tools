@@ -68,6 +68,22 @@ class KicadCmdTest(unittest.TestCase):
         self.assertIn("hi", out)
         self.assertEqual({p: p.stat().st_mtime_ns for p in self.project.dir.iterdir()}, before)
 
+    @needs_kicad
+    def test_sys_exit_zero_saves(self):
+        body = "import sys\n" + PAPER_A3 + 'print("x", end="")\nsys.exit(0)\n'
+        code, out, err = run_cli("kicad", "run", self.script(body), "--project", self.project.dir)
+        self.assertEqual(code, 0, err)
+        self.assertIn("x", out)
+        self.assertIn('(paper "A3")', self.project.root_sch.read_text(encoding="utf-8"))
+
+    def test_sys_exit_nonzero_fails(self):
+        before = self.project.root_sch.read_bytes()
+        body = "import sys\n" + PAPER_A3 + "sys.exit(3)\n"
+        code, out, err = run_cli("kicad", "run", self.script(body), "--project", self.project.dir)
+        self.assertEqual(code, 1)
+        self.assertIn("sys.exit(3)", err)
+        self.assertEqual(self.project.root_sch.read_bytes(), before)
+
     def test_locked_exit_6(self):
         lock_path(self.project.root_sch).write_text("x")
         code, out, err = run_cli("kicad", "run", self.script(PAPER_A3), "--project", self.project.dir)

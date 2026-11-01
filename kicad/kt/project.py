@@ -35,6 +35,22 @@ class LockedError(Exception):
         self.paths = paths
 
 
+class ChangedOnDiskError(LockedError):
+    def __init__(self, paths: list[Path]):
+        Exception.__init__(self, "changed on disk since the script read it: "
+                           + ", ".join(str(p) for p in paths) + " — nothing written; run the script again")
+        self.paths = paths
+
+
+class WriteError(Exception):
+    def __init__(self, written: list[Path], failed: Path, rest: list[Path], error: OSError):
+        lines = [f"could not write {failed}: {error}"]
+        lines += [f"  written: {p}" for p in written] or ["  written: nothing"]
+        lines += [f"  not written: {p}" for p in [failed] + rest]
+        super().__init__("\n".join(lines))
+        self.written, self.failed, self.rest = written, failed, rest
+
+
 class RejectedError(Exception):
     def __init__(self, path: Path, output: str):
         super().__init__(f"rejected by kicad-cli, nothing written: {path}\n{output.strip()}")
@@ -49,6 +65,19 @@ def lock_path(path: Path) -> Path:
 
 def locked(path: Path) -> bool:
     return lock_path(path).exists()
+
+
+def stamp(path: Path):
+    """What a file on disk looks like now: (mtime ns, size), or None if it is missing."""
+    try:
+        st = Path(path).stat()
+    except FileNotFoundError:
+        return None
+    return (st.st_mtime_ns, st.st_size)
+
+
+TABLE_FILES = ("sym-lib-table", "fp-lib-table")
+RESAVE = {".kicad_sch": "sch", ".kicad_pcb": "pcb", ".kicad_sym": "sym", ".kicad_mod": "fp"}
 
 
 def kicad_running() -> bool:
@@ -83,10 +112,18 @@ def check_version(root: Node, path: Path) -> None:
         return
     v = root.get("version")
     have = v[0] if v is not None else None
-    if have != want:
-        raise FormatError(
-            f"{path} is in format {have}; kt edits only KiCad 10.0.1's format {want}. "
-            f"Run `devtools kicad upgrade` (or open and save it in KiCad 10) first.")
+    if have == want:
+        return
+    if isinstance(have, int) and have > want:
+        raise FormatError(f"{path} is in format {have}, newer than KiCad 10.0.1's {want} that kt knows; "
+                          f"kt cannot edit it safely.")
+    if root.head in ("kicad_sch", "kicad_pcb"):
+        how = "`devtools kicad upgrade`"
+    else:
+        lib = path.parent if root.head == "footprint" else path
+        how = f"`devtools kicad upgrade --lib \"{lib}\"`"
+    raise FormatError(f"{path} is in format {have}; kt edits only KiCad 10.0.1's format {want}. "
+                      f"Run {how} (or open and save it in KiCad 10) first.")
 
 
 class Document:
@@ -96,6 +133,7 @@ class Document:
         self.project = project
         self.path = Path(path)
         self.new = root is not None
+        self._stamp = stamp(self.path)
         if root is None:
             root = parse(read_text(self.path))
             check_version(root, self.path)
@@ -115,6 +153,7 @@ class Document:
     def _saved(self) -> None:
         self.root = parse(read_text(self.path))
         self.new = False
+        self._stamp = stamp(self.path)
 
 
 # file suffix -> Document subclass; filled in by the modules that define them
@@ -210,50 +249,98 @@ class Project:
     def _inside(self, path: Path) -> bool:
         return path.is_relative_to(self.dir)
 
+    def schematic_open(self) -> bool:
+        """KiCad's schematic editor locks only the sheet it opened; it holds every sheet."""
+        return any(self.dir.rglob("~*.kicad_sch.lck"))
+
+    def is_locked(self, path: Path) -> bool:
+        path = Path(path)
+        if locked(path):
+            return True
+        return path.suffix == ".kicad_sch" and self._inside(path.resolve()) and self.schematic_open()
+
+    def _busy(self, docs) -> None:
+        busy = [d.path for d in docs if self.is_locked(d.path)]
+        if busy:
+            raise LockedError(busy)
+        moved = [d.path for d in docs if stamp(d.path) != d._stamp]
+        if moved:
+            raise ChangedOnDiskError(moved)
+
     def save(self) -> SaveResult:
+        """Check locks, load every changed file in kicad-cli from a staged copy, check again, write."""
         docs = self.changed()
         if not docs:
             return SaveResult()
-        busy = [d.path for d in docs if locked(d.path)]
-        if busy:
-            raise LockedError(busy)
+        self._busy(docs)
         with tempfile.TemporaryDirectory(prefix="kt-stage-") as tmp:
-            reports = self._stage_and_check(docs, Path(tmp))
+            reports = _check_all(self, docs, Path(tmp))
+        self._busy(docs)          # opened or saved in KiCad while the checks ran?
         written = []
-        for d in docs:
-            write_atomic(d.path, d.text())
+        for i, d in enumerate(docs):
+            try:
+                write_atomic(d.path, d.text())
+            except OSError as e:
+                raise WriteError(written, d.path, [x.path for x in docs[i + 1:]], e) from None
             written.append(d.path)
             d._saved()
         return SaveResult(written, reports)
 
-    def _stage_and_check(self, docs: list[Document], tmp: Path) -> dict:
-        staged_dir = tmp / "project"
-        shutil.copytree(self.dir, staged_dir, ignore=STAGE_IGNORE)
-        staged = {}
-        for i, d in enumerate(docs):
-            if self._inside(d.path):
-                target = staged_dir / d.path.relative_to(self.dir)
-            else:
-                target = tmp / "outside" / str(i) / d.path.parent.name / d.path.name
-            target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_text(d.text(), encoding="utf-8", newline="")
-            staged[d.path] = target
-        reports = {}
+
+def _resave_check(staged: Path) -> None:
+    """Have kicad-cli load the file on its own and save it again; exit 3 = it cannot be loaded.
+
+    Loading through the root sheet is lenient with sub-sheets, so every changed
+    file is loaded by itself.
+    """
+    kind = RESAVE[staged.suffix]
+    with tempfile.TemporaryDirectory(prefix="kt-probe-") as tmp:
+        if kind == "fp":
+            target = Path(tmp) / staged.parent.name
+            target.mkdir()
+            shutil.copy2(staged, target / staged.name)
+        else:
+            target = Path(tmp) / staged.name
+            shutil.copy2(staged, target)
         try:
-            if any(d.path.suffix == ".kicad_sch" and self._inside(d.path) for d in docs):
-                reports[self.root_sch] = cli.erc(staged_dir / self.root_sch.name)
-            if any(d.path == self.pcb_path for d in docs):
-                reports[self.pcb_path] = cli.drc(staged_dir / self.pcb_path.name)
-            for d in docs:
-                if d.path.suffix in (".kicad_sch", ".kicad_pcb"):
-                    continue
-                report = d.check(staged[d.path])
-                if report is not None:
-                    reports[d.path] = report
-        except cli.LoadError as e:
-            original = next((p for p, s in staged.items() if s == e.path), e.path)
-            raise RejectedError(original, e.output) from None
-        return reports
+            cli.run(kind, "upgrade", "--force", target, input_file=staged)
+        except cli.CliFailed as e:
+            raise cli.LoadError(staged, str(e)) from None
+
+
+def _check_all(project, docs: list[Document], tmp: Path) -> dict:
+    staged_dir = tmp / "project"
+    shutil.copytree(project.dir, staged_dir, ignore=STAGE_IGNORE)
+    staged = {}
+    for i, d in enumerate(docs):
+        if project._inside(d.path):
+            target = staged_dir / d.path.relative_to(project.dir)
+        else:
+            target = tmp / "outside" / str(i) / d.path.parent.name / d.path.name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(d.text(), encoding="utf-8", newline="")
+        staged[d.path] = target
+    reports = {}
+    try:
+        for d in docs:
+            if d.path.suffix in RESAVE:
+                _resave_check(staged[d.path])
+            elif d.path.name not in TABLE_FILES:
+                raise RejectedError(d.path, "kt has no check for this kind of file, so it does not write it")
+        if any(d.path.suffix == ".kicad_sch" and project._inside(d.path) for d in docs):
+            reports[project.root_sch] = cli.erc(staged_dir / project.root_sch.name)
+        if any(d.path == project.pcb_path for d in docs):
+            reports[project.pcb_path] = cli.drc(staged_dir / project.pcb_path.name)
+        for d in docs:
+            if d.path.suffix in (".kicad_sch", ".kicad_pcb"):
+                continue
+            report = d.check(staged[d.path])
+            if report is not None:
+                reports[d.path] = report
+    except cli.LoadError as e:
+        original = next((p for p, s in staged.items() if s == e.path or s.parent == e.path), e.path)
+        raise RejectedError(original, e.output) from None
+    return reports
 
 
 def new_project(dir, name: str) -> Project:

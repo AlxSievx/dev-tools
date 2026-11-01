@@ -182,6 +182,15 @@ class WiringTest(unittest.TestCase):
         self.sch.wire((25.4, 25.4), (25.4, 12.7))   # a corner: two ends, no junction
         self.assertEqual(len(self.sch.root.all("junction")), 1)
 
+    def test_junction_only_where_touched(self):
+        for a, b in (((25.4, 25.4), (50.8, 25.4)), ((38.1, 25.4), (38.1, 38.1))):
+            self.sch.root.insert(len(self.sch.root.items) - 2, Node(
+                "wire", Node("pts", Node("xy", *a), Node("xy", *b)), Node("uuid", str(uuid.uuid4()))))
+        self.sch.add_symbol("Device:R", "R1", (127, 127))
+        self.assertEqual(self.sch.root.all("junction"), [])     # the user's T stays as drawn
+        self.sch.wire((38.1, 25.4), (38.1, 12.7))               # a new wire end at the T
+        self.assertEqual([tuple(j.get("at").values()) for j in self.sch.root.all("junction")], [(38.1, 25.4)])
+
     def test_labels_and_no_connect(self):
         r = self.sch.add_symbol("Device:R", "R1", (50.8, 50.8))
         self.sch.label("A", "R1:1", kind="global")

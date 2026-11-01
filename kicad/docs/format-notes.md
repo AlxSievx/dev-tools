@@ -17,8 +17,12 @@ and board up (`kicad-cli sch|pcb upgrade --force`).
 
 ## kicad-cli
 
-- Exit code **3** = could not load the file (malformed, unknown token). An
-  unknown token is a load failure, not a warning — so a staged load is a real check.
+- Exit code **3** = could not load the file (malformed, unknown token).
+- Loading a hierarchy through the root sheet is **lenient**: a broken sub-sheet
+  can still give ERC exit 0. So `kt` loads every changed file by itself —
+  `kicad-cli sch|pcb|sym|fp upgrade --force` on a copy — before it writes anything.
+- The schematic editor locks only the sheet it opened (as far as known); `kt`
+  treats every sheet of the project as open while any sheet lock exists.
 - Messages follow KiCad's UI language (German here): read JSON reports, not text.
 - `kicad-cli` writes a `.kicad_prl` beside the project it loads.
 - No "Update PCB from Schematic" — that stays F8 in the board editor.
