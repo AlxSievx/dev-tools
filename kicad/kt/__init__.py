@@ -6,3 +6,4 @@ from kt.sexpr import Node, Sym, dump, parse
 from kt.project import (FormatError, LockedError, Project, RejectedError, kicad_running, locked,
                         new_project)
 from kt.cli import KicadCliMissing, LoadError
+from kt.libs import LibTables, register_library

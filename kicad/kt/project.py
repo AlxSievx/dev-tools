@@ -155,6 +155,14 @@ class Project:
     def pcb_path(self) -> Path:
         return self.dir / f"{self.name}.kicad_pcb"
 
+    @property
+    def libs(self):
+        """The project's view of the library tables (project first, then global)."""
+        if getattr(self, "_libs", None) is None:
+            from kt.libs import LibTables
+            self._libs = LibTables(self)
+        return self._libs
+
     def document(self, path, root: Node | None = None) -> Document:
         """The document at `path` (relative to the project dir), loaded once.
 
