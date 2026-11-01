@@ -132,6 +132,13 @@ class KicadCmdTest(unittest.TestCase):
         self.assertEqual(code, 1)
 
     @needs_kicad
+    def test_info_command(self):
+        code, out, err = run_cli("kicad", "info", self.project.dir)
+        self.assertEqual(code, 0, err)
+        self.assertIn("in step: yes", out)
+        self.assertIn("ERC: 0 errors", out)
+
+    @needs_kicad
     def test_drc_command_reports_parity_apart(self):
         code, out, err = run_cli("kicad", "drc", self.project.dir)
         self.assertEqual(code, 0, err)

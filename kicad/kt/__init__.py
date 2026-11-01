@@ -7,3 +7,6 @@ from kt.project import (FormatError, LockedError, Project, RejectedError, kicad_
                         new_project)
 from kt.cli import KicadCliMissing, LoadError
 from kt.libs import LibTables, register_library
+from kt.schematic import PlacedSymbol, Schematic
+from kt.board import Board, PlacedFootprint
+from kt.info import info

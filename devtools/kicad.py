@@ -153,6 +153,12 @@ def cmd_drc(args) -> int:
     return FAILED if args.strict and report.errors else DONE
 
 
+def cmd_info(args) -> int:
+    from kt.info import info
+    print(info(open_project(args.project)))
+    return DONE
+
+
 def project_files(project) -> list[Path]:
     skip = (".git", ".history")
     return sorted(p for p in project.dir.rglob("*")
@@ -234,5 +240,6 @@ def add_parser(tools) -> None:
     c.add_argument("--strict", action="store_true")
     c = add("drc", cmd_drc, "design rules check of the board (schematic parity listed apart)")
     c.add_argument("--strict", action="store_true")
+    add("info", cmd_info, "the project in numbers: symbols, nets, footprints, in step with the board, checks")
     add("locks", cmd_locks, "which project files are open in KiCad right now")
     add("upgrade", cmd_upgrade, "bring schematic and board files to KiCad 10's current format")
