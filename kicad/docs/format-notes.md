@@ -21,6 +21,9 @@ and board up (`kicad-cli sch|pcb upgrade --force`).
 - Loading a hierarchy through the root sheet is **lenient**: a broken sub-sheet
   can still give ERC exit 0. So `kt` loads every changed file by itself —
   `kicad-cli sch|pcb|sym|fp upgrade --force` on a copy — before it writes anything.
+- Lock files: `~<file name>.lck` beside the open file (confirmed 2026-11-01 with the
+  board editor: `~pic_programmer.kicad_pcb.lck`); an open project also has
+  `~<name>.kicad_pro.lck`.
 - The schematic editor locks only the sheet it opened (as far as known); `kt`
   treats every sheet of the project as open while any sheet lock exists.
 - Messages follow KiCad's UI language (German here): read JSON reports, not text.
