@@ -20,6 +20,8 @@ def build_parser() -> Parser:
     tools = parser.add_subparsers(dest="tool", parser_class=Parser)
     from devtools import fusion
     fusion.add_parser(tools)
+    from devtools import kicad
+    kicad.add_parser(tools)
     return parser
 
 
