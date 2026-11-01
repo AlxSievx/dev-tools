@@ -159,6 +159,39 @@ def cmd_info(args) -> int:
     return DONE
 
 
+def cmd_shot(args) -> int:
+    from kt import views
+    try:
+        width, height = (int(v) for v in args.size.lower().split("x"))
+    except ValueError:
+        raise Usage(f"--size wants WxH, e.g. 1600x1000, not {args.size!r}") from None
+    out = Path(args.out).resolve() if args.out else log_dir() / "shots" / time.strftime("%Y%m%d-%H%M%S")
+    project = open_project(args.project)
+    what = args.what
+    if args.kind == "sch":
+        paths = [views.sch_pdf(project, out, pages=args.pages or "")]
+    elif args.kind == "pcb":
+        bad = [v for v in what if v not in views.VIEWS]
+        if not what or bad:
+            raise Usage(f"views: {', '.join(views.VIEWS)}" + (f" (not {', '.join(bad)})" if bad else ""))
+        paths = [views.pcb_png(project, v, out, (width, height)) for v in what]
+    elif args.kind == "pcb-layers":
+        if len(what) != 1:
+            raise Usage("shot pcb-layers F.Cu,F.Silkscreen,Edge.Cuts")
+        paths = [views.pcb_layers_pdf(project, what[0], out)]
+    else:
+        if not what:
+            raise Usage(f"shot {args.kind} LIB:NAME")
+        make = views.footprint_pdf if args.kind == "fp" else views.symbol_pdf
+        try:
+            paths = [make(name, out, project.libs) for name in what]
+        except KeyError as e:
+            raise Usage(str(e).strip('"')) from None
+    for path in paths:
+        print(path)
+    return DONE
+
+
 def project_files(project) -> list[Path]:
     skip = (".git", ".history")
     return sorted(p for p in project.dir.rglob("*")
@@ -240,6 +273,14 @@ def add_parser(tools) -> None:
     c.add_argument("--strict", action="store_true")
     c = add("drc", cmd_drc, "design rules check of the board (schematic parity listed apart)")
     c.add_argument("--strict", action="store_true")
+    c = add("shot", cmd_shot, "pictures: sch (PDF), pcb VIEW… (PNG), pcb-layers LAYERS (PDF), fp/sym LIB:NAME (PDF)",
+            True)
+    c.add_argument("kind", choices=["sch", "pcb", "pcb-layers", "fp", "sym"])
+    c.add_argument("what", nargs="*", help="pcb views: top bottom front back left right iso; "
+                                            "layers: F.Cu,Edge.Cuts; fp/sym: LIB:NAME")
+    c.add_argument("--pages", help="sch: page numbers, e.g. 1,3")
+    c.add_argument("--out", help="directory for the pictures (default: a new folder under %%TEMP%%)")
+    c.add_argument("--size", default="1600x1000", help="pcb renders: WxH in pixels")
     add("info", cmd_info, "the project in numbers: symbols, nets, footprints, in step with the board, checks")
     add("locks", cmd_locks, "which project files are open in KiCad right now")
     add("upgrade", cmd_upgrade, "bring schematic and board files to KiCad 10's current format")

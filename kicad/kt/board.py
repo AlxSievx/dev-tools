@@ -2,9 +2,14 @@
 
 Placement helpers (move, rotate, flip, outline, adding library footprints) follow in this module.
 """
+import uuid as _uuid
+
 from kt.geometry import pcb_point
 from kt.project import DOCUMENT_TYPES, Document
-from kt.sexpr import Node
+from kt.sexpr import Node, Sym
+
+LIBRARY_ONLY = ("version", "generator", "generator_version")
+ANGLED = ("pad", "property", "fp_text")   # items whose (at …) angle is stored absolute on a board
 
 
 def _prop(node: Node, name: str):
@@ -102,6 +107,64 @@ class Board(Document):
             return None
         xs, ys = [p[0] for p in pts], [p[1] for p in pts]
         return (min(xs), min(ys), max(xs), max(ys))
+
+
+    def _insert_footprint(self, node: Node) -> Node:
+        items = self.root.items
+        last = max((i for i, it in enumerate(items) if isinstance(it, Node) and it.head == "footprint"),
+                   default=None)
+        if last is None:
+            last = next((i - 1 for i, it in enumerate(items) if isinstance(it, Node)
+                         and it.head in ("gr_line", "gr_rect", "gr_arc", "gr_circle", "gr_poly", "gr_text",
+                                         "segment", "arc", "via", "zone", "embedded_fonts")), len(items) - 1)
+        return self.root.insert(last + 1, node)
+
+    def add_footprint(self, fp_id: str, ref: str, at, rot: float = 0, side: str = "top", *,
+                      value: str | None = None, board_only: bool = True, libs=None) -> "PlacedFootprint":
+        """Place a library footprint with no nets — for mounting holes, fiducials, logos.
+
+        Parts from the schematic arrive through F8 in KiCad, not through here.
+        `board_only` marks it "not in schematic" so schematic parity does not flag it.
+        """
+        if side != "top":
+            raise ValueError("add_footprint places on top; flip() it afterwards")
+        lib = (libs or self.project.libs).footprint(fp_id)
+        node = Node("footprint", fp_id)
+        for item in lib.items[1:]:
+            if not isinstance(item, Node) or item.head in LIBRARY_ONLY:
+                continue
+            node.append(item.copy())
+        layer_at = next(i for i, it in enumerate(node.items) if isinstance(it, Node) and it.head == "layer")
+        node.insert(layer_at + 1, Node("uuid", str(_uuid.uuid4())))
+        node.insert(layer_at + 2, Node("at", at[0], at[1], rot) if rot else Node("at", at[0], at[1]))
+        for p in node.all("property"):
+            if p[0] == "Reference":
+                p.set(1, ref)
+            elif p[0] == "Value" and value is not None:
+                p.set(1, value)
+        if rot:
+            _turn_angles(node, rot)
+        if board_only:
+            attr = node.get("attr")
+            if attr is None:
+                node.append(Node("attr", Sym("board_only")))
+            elif "board_only" not in [str(v) for v in attr.values()]:
+                attr.append(Sym("board_only"))
+        self._insert_footprint(node)
+        return PlacedFootprint(self, node)
+
+
+def _turn_angles(fp: Node, delta: float) -> None:
+    """Add `delta` to the stored angle of pads and texts (KiCad keeps them absolute)."""
+    for item in fp.all():
+        if item.head not in ANGLED:
+            continue
+        at = item.get("at")
+        if at is None:
+            continue
+        angle = ((at[2] if len(at) > 2 else 0) + delta) % 360
+        angle = int(angle) if float(angle).is_integer() else round(angle, 6)
+        item.replace(at, Node("at", at[0], at[1], angle) if angle else Node("at", at[0], at[1]))
 
 
 DOCUMENT_TYPES[".kicad_pcb"] = Board

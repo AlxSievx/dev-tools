@@ -212,12 +212,12 @@ class Schematic(Document):
                 return s
         raise KeyError(f"{lib_id} is not embedded in {self.path.name}")
 
-    def _embed(self, lib_id: str) -> Node:
+    def _embed(self, lib_id: str, libs=None) -> Node:
         try:
             return self.embedded(lib_id)
         except KeyError:
             pass
-        sym = self.project.libs.symbol(lib_id)
+        sym = (libs or self.project.libs).symbol(lib_id)
         sym.set(0, lib_id)
         return self.lib_symbols.append(sym)
 
@@ -245,13 +245,13 @@ class Schematic(Document):
 
     def add_symbol(self, lib_id: str, ref: str, at, *, value: str | None = None,
                    footprint: str | None = None, rot: int = 0, mirror: str | None = None,
-                   unit: int = 1, fields: dict | None = None) -> PlacedSymbol:
+                   unit: int = 1, fields: dict | None = None, libs=None) -> PlacedSymbol:
         require_grid(tuple(at), what=f"{ref} position")
         if rot not in (0, 90, 180, 270):
             raise ValueError(f"rot must be 0, 90, 180 or 270, not {rot}")
         if mirror not in (None, "x", "y"):
             raise ValueError(f"mirror must be None, 'x' or 'y', not {mirror!r}")
-        lib = self._embed(lib_id)
+        lib = self._embed(lib_id, libs)
         units = {unit_of(u[0])[0] for u in lib.all("symbol")} - {0}
         if units and unit not in units:
             raise ValueError(f"{lib_id} has units {sorted(units)}, not {unit}")
