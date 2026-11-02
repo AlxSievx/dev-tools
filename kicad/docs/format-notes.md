@@ -73,6 +73,12 @@ and board up (`kicad-cli sch|pcb upgrade --force`).
   Pin angle 180 on the left edge (justify left), 0 on the right (justify right).
 - A sub-sheet file KiCad 10 writes has no `sheet_instances` and no `embedded_fonts`; it
   ends with its last drawing item.
+- Note: `(text "…" (exclude_from_sim no) (at x y rot) (effects (font (size) [thickness]
+  [(bold yes)] [(italic yes)]) (justify left bottom)) (uuid))`; `\n` in the string is a line break.
+- Text box: `(text_box "…" (exclude_from_sim no) (at x y 0) (size w h) (margins …4)
+  (stroke) (fill) (effects …) (uuid))`; no border = stroke width `-0.0001` (type `none` is refused).
+- Rectangle: `(rectangle (start) (end) (stroke (width) (type dash)) (fill (type none)) (uuid))`.
+- `title_block`: after `paper`; children `title date rev company` then `(comment n "…")`, n 1–9.
 - Hidden field: `(hide yes)` right after the property's `(at …)`; shown = no `hide` node.
   DNP: `(dnp yes)` before the symbol's `uuid`.
 

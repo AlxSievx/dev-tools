@@ -280,6 +280,94 @@ class Schematic(Document):
         """Add a drawing item before `sheet_instances` / `embedded_fonts`, as KiCad orders them."""
         return self.root.insert(min(self._index_of("sheet_instances"), self._index_of("embedded_fonts")), node)
 
+    # ---- drawing items and sheet settings
+    def add_text(self, text: str, at, *, size: float = 1.27, rot: int = 0,
+                 justify: tuple = ("left", "bottom"), bold: bool = False, italic: bool = False) -> Node:
+        """A note on the sheet (not a label: it connects nothing)."""
+        if rot not in (0, 90, 180, 270):
+            raise ValueError(f"rot must be 0, 90, 180 or 270, not {rot}")
+        font = Node("font", Node("size", size, size))
+        if bold:
+            font.append(Node("thickness", round(size * 0.2, 4)))
+            font.append(Node("bold", Sym("yes")))
+        if italic:
+            font.append(Node("italic", Sym("yes")))
+        effects = Node("effects", font)
+        if justify:
+            effects.append(Node("justify", *(Sym(j) for j in justify)))
+        return self._insert_item(Node("text", text, Node("exclude_from_sim", Sym("no")),
+                                      Node("at", at[0], at[1], rot), effects, Node("uuid", new_uuid())))
+
+    def text_box(self, text: str, at, size, *, font: float = 1.27, border: bool = True) -> Node:
+        """A text box: `at` its top-left corner, `size` (w, h)."""
+        # KiCad marks a text box without border by a negative stroke width
+        stroke = Node("stroke", Node("width", 0 if border else -0.0001), Node("type", Sym("default" if border else "solid")))
+        return self._insert_item(Node(
+            "text_box", text, Node("exclude_from_sim", Sym("no")), Node("at", at[0], at[1], 0),
+            Node("size", size[0], size[1]), Node("margins", 0.9525, 0.9525, 0.9525, 0.9525), stroke,
+            Node("fill", Node("type", Sym("none"))),
+            Node("effects", Node("font", Node("size", font, font)), Node("justify", Sym("left"), Sym("top"))),
+            Node("uuid", new_uuid())))
+
+    RECT_STYLES = ("default", "solid", "dash", "dot", "dash_dot", "dash_dot_dot")
+
+    def rect(self, start, end, *, width: float = 0, style: str = "default") -> Node:
+        """A rectangle (no fill), e.g. around a group of parts."""
+        if style not in self.RECT_STYLES:
+            raise ValueError(f"style must be one of {', '.join(self.RECT_STYLES)}, not {style!r}")
+        return self._insert_item(Node(
+            "rectangle", Node("start", start[0], start[1]), Node("end", end[0], end[1]),
+            Node("stroke", Node("width", width), Node("type", Sym(style))),
+            Node("fill", Node("type", Sym("none"))), Node("uuid", new_uuid())))
+
+    def title_block(self, *, title: str | None = None, date: str | None = None, rev: str | None = None,
+                    company: str | None = None, comments: dict[int, str] | None = None) -> dict:
+        """Set the given title-block fields (comments 1–9); returns all of them."""
+        for n in comments or {}:
+            if not 1 <= n <= 9:
+                raise ValueError(f"title block comments are numbered 1–9, not {n}")
+        tb = self.root.get("title_block")
+        if tb is None:
+            tb = self.root.insert(self._index_of("paper", after=True), Node("title_block"))
+        for head, value in (("title", title), ("date", date), ("rev", rev), ("company", company)):
+            if value is None:
+                continue
+            node = tb.get(head)
+            if node is None:
+                order = ["title", "date", "rev", "company"]
+                later = [i for i, item in enumerate(tb.items) if isinstance(item, Node)
+                         and (item.head == "comment" or (item.head in order and order.index(item.head) > order.index(head)))]
+                tb.insert(later[0] if later else len(tb.items), Node(head, value))
+            else:
+                node.set(0, value)
+        for n, value in sorted((comments or {}).items()):
+            node = next((c for c in tb.all("comment") if c[0] == n), None)
+            if node is None:
+                tb.append(Node("comment", n, value))
+            else:
+                node.set(1, value)
+        out = {h: (tb.get(h)[0] if tb.get(h) is not None else "") for h in ("title", "date", "rev", "company")}
+        out["comments"] = {c[0]: c[1] for c in tb.all("comment")}
+        return out
+
+    PAPERS = ("A5", "A4", "A3", "A2", "A1", "A0", "A", "B", "C", "D", "E", "USLetter", "USLegal", "USLedger")
+
+    @property
+    def paper(self) -> tuple[str, bool]:
+        """(size, portrait)."""
+        p = self.root.get("paper")
+        return (p[0], any(str(v) == "portrait" for v in p.values()[1:])) if p is not None else ("A4", False)
+
+    def set_paper(self, size: str, portrait: bool = False) -> None:
+        if size not in self.PAPERS:
+            raise ValueError(f"paper must be one of {', '.join(self.PAPERS)}, not {size!r}")
+        node = Node("paper", size, Sym("portrait")) if portrait else Node("paper", size)
+        old = self.root.get("paper")
+        if old is None:
+            self.root.insert(self._index_of("uuid", after=True), node)
+        else:
+            self.root.replace(old, node)
+
     # ---- sub-sheets
     def sheet_symbols(self) -> list:
         from kt.sheets import Sheet

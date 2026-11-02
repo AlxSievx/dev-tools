@@ -67,6 +67,12 @@ sch.wire("Halfbridge_U:IN", (12.7, 27.94)); hb.add_pin("EN", "input", "left", 10
 child = hb.child(); child.label("IN", (40.64, 50.8), rot=180, kind="hierarchical", shape="input")
 project.next_page(); sch.sheet("Halfbridge_U").pages()
 
+sch.add_text("UDC = AD_U_DC * 18.45", (30.48, 120.65), size=1.27, bold=False)   # a note, connects nothing
+sch.text_box("Nur einen Regler bestücken!", (30.48, 125.73), (50.8, 7.62), border=True)
+sch.rect((25.4, 25.4), (101.6, 76.2), style="dash")    # default solid dash dot dash_dot dash_dot_dot
+sch.title_block(title="Halfbridge", date="2026-11-02", rev="1.0", company="SciMo", comments={1: "AS"})
+sch.set_paper("A3"); sch.paper                         # ("A3", False); set_paper("A4", portrait=True)
+
 board = project.document(project.pcb_path)
 board.outline_rect(0, 0, 60, 40, r=2)        # or outline_polygon([...])
 board.footprint("U1").move(20, 15); board.footprint("U1").rotate_to(90)
