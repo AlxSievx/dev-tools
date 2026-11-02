@@ -54,6 +54,10 @@ sch.label("SDA", "U2:5", kind="local")       # local | global | hierarchical
 sch.power("GND", (76.2, 66.04)); sch.no_connect("U2:7")
 sch.move("R1", (63.5, 63.5)); sch.rotate("R1", 90); sch.delete("R9")
 sch.symbol("R1").set_field("Value", "4k7"); u1.pins(); u1.pin("VI")
+sch.next_ref("R", start=301)                 # first free number from 301 on (whole project, all instances)
+refs = sch.next_refs("R", {p: int(pg) * 100 + 1 for p, pg in sch.instance_pages().items()})
+sch.add_symbol("Device:R", refs, (25.4, 25.4))   # a sheet used several times needs one ref per instance
+sch.symbol("R301").refs; sch.symbol("R5").set_dnp(); sch.symbol("C3").show_field("Voltage")
 
 board = project.document(project.pcb_path)
 board.outline_rect(0, 0, 60, 40, r=2)        # or outline_polygon([...])

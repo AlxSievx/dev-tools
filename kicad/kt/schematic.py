@@ -65,10 +65,30 @@ def _interior(p, a, b) -> bool:
     return False
 
 
-def sheet_tree(project) -> dict[Path, list[str]]:
-    """Every sheet file reachable from the root, with the instance paths it is used under."""
+def _root_page(root: Node) -> str:
+    inst = root.get("sheet_instances")
+    for path in inst.all("path") if inst is not None else []:
+        if path[0] == "/" and path.get("page") is not None:
+            return str(path.get("page")[0])
+    return "1"
+
+
+def sheet_page(sheet: Node, parent_path: str) -> str:
+    """The page number a `(sheet …)` node gives its instance under `parent_path` ('' if none)."""
+    inst = sheet.get("instances")
+    for proj in inst.all("project") if inst is not None else []:
+        for path in proj.all("path"):
+            if path[0] == parent_path and path.get("page") is not None:
+                return str(path.get("page")[0])
+    return ""
+
+
+def hierarchy(project) -> tuple[dict[Path, list[str]], dict[str, str]]:
+    """Every sheet file reachable from the root with its instance paths, and each path's page."""
     root_doc = project.document(project.root_sch)
-    tree = {root_doc.path: ["/" + root_doc.root.get("uuid")[0]]}
+    root_path = "/" + root_doc.root.get("uuid")[0]
+    tree = {root_doc.path: [root_path]}
+    pages = {root_path: _root_page(root_doc.root)}
     todo = [root_doc]
     while todo:
         doc = todo.pop(0)
@@ -76,13 +96,21 @@ def sheet_tree(project) -> dict[Path, list[str]]:
             file = _prop(sheet, "Sheetfile")[1]
             child_path = (doc.path.parent / file).resolve()
             sid = sheet.get("uuid")[0]
-            paths = [p + "/" + sid for p in tree[doc.path]]
+            paths = []
+            for parent in tree[doc.path]:
+                paths.append(parent + "/" + sid)
+                pages[paths[-1]] = sheet_page(sheet, parent)
             if child_path in tree:
                 tree[child_path] += paths
             else:
                 tree[child_path] = paths
                 todo.append(project.document(child_path))
-    return tree
+    return tree, pages
+
+
+def sheet_tree(project) -> dict[Path, list[str]]:
+    """Every sheet file reachable from the root, with the instance paths it is used under."""
+    return hierarchy(project)[0]
 
 
 class PlacedSymbol:
@@ -125,8 +153,49 @@ class PlacedSymbol:
         m = self.node.get("mirror")
         return str(m[0]) if m is not None else None
 
+    @property
+    def refs(self) -> dict[str, str]:
+        """Instance path -> reference (a sheet used several times gives one per instance)."""
+        out = {}
+        inst = self.node.get("instances")
+        for proj in inst.all("project") if inst is not None else []:
+            for path in proj.all("path"):
+                if path.get("reference") is not None:
+                    out[path[0]] = path.get("reference")[0]
+        return out
+
+    def answers_to(self, ref: str) -> bool:
+        return self.ref == ref or ref in self.refs.values()
+
     def fields(self) -> dict[str, str]:
         return {p[0]: p[1] for p in self.node.all("property")}
+
+    def set_dnp(self, dnp: bool = True) -> None:
+        """Mark the symbol Do Not Populate (KiCad's DNP flag), or clear it."""
+        flag = Sym("yes" if dnp else "no")
+        node = self.node.get("dnp")
+        if node is None:
+            self.node.insert(self.node.items.index(self.node.get("uuid")), Node("dnp", flag))
+        else:
+            node.set(0, flag)
+
+    def show_field(self, name: str, visible: bool = True, at: tuple | None = None) -> None:
+        """Show or hide a field on the sheet; `at` moves it."""
+        p = _prop(self.node, name)
+        if p is None:
+            raise KeyError(f"{self.ref} has no field {name!r} (fields: {', '.join(self.fields())})")
+        hide = p.get("hide")
+        if visible:
+            if hide is not None:
+                p.remove(hide)
+        elif hide is not None:
+            hide.set(0, Sym("yes"))
+        else:
+            p.insert(p.items.index(p.get("at")) + 1, Node("hide", Sym("yes")))
+        if at is not None:
+            pa = p.get("at")
+            pa.set(0, at[0])
+            pa.set(1, at[1])
 
     def lib_symbol(self) -> Node:
         return self.sch.embedded(self.lib_id)
@@ -188,6 +257,11 @@ class Schematic(Document):
     def instance_paths(self) -> list[str]:
         return sheet_tree(self.project).get(self.path.resolve(), [])
 
+    def instance_pages(self) -> dict[str, str]:
+        """Instance path -> page number of this sheet file."""
+        tree, pages = hierarchy(self.project)
+        return {p: pages.get(p, "") for p in tree.get(self.path.resolve(), [])}
+
     @property
     def lib_symbols(self) -> Node:
         node = self.root.get("lib_symbols")
@@ -225,14 +299,15 @@ class Schematic(Document):
         return [PlacedSymbol(self, n) for n in self.root.all("symbol")]
 
     def symbol(self, ref: str, unit: int | None = None) -> PlacedSymbol:
+        """A symbol by its reference, or by the reference of any of its instances."""
         for s in self.symbols():
-            if s.ref == ref and (unit is None or s.unit == unit):
+            if s.answers_to(ref) and (unit is None or s.unit == unit):
                 return s
         raise KeyError(f"no symbol {ref}" + (f" unit {unit}" if unit else "") + f" in {self.path.name}")
 
-    def next_ref(self, prefix: str) -> str:
+    def _used_numbers(self, prefix: str) -> set[int]:
         pat = re.compile(re.escape(prefix) + r"(\d+)\Z")
-        top = 0
+        used = set()
         for sheet in self.project.sheets():
             for node in sheet.root.all("symbol"):
                 refs = [_prop(node, "Reference")[1]]
@@ -240,12 +315,53 @@ class Schematic(Document):
                 for ref in refs:
                     m = pat.match(ref)
                     if m:
-                        top = max(top, int(m.group(1)))
-        return f"{prefix}{top + 1}"
+                        used.add(int(m.group(1)))
+        return used
 
-    def add_symbol(self, lib_id: str, ref: str, at, *, value: str | None = None,
+    def next_ref(self, prefix: str, start: int | None = None) -> str:
+        """Highest number in use + 1, or with `start` the first free number from `start` on.
+
+        Every sheet of the project counts, every instance of it too.
+        """
+        used = self._used_numbers(prefix)
+        if start is None:
+            return f"{prefix}{max(used, default=0) + 1}"
+        n = start
+        while n in used:
+            n += 1
+        return f"{prefix}{n}"
+
+    def next_refs(self, prefix: str, starts: dict[str, int]) -> dict[str, str]:
+        """One free reference per instance path, each the first free number from its start."""
+        used = self._used_numbers(prefix)
+        out = {}
+        for path, n in starts.items():
+            while n in used:
+                n += 1
+            used.add(n)
+            out[path] = f"{prefix}{n}"
+        return out
+
+    def _instance_refs(self, ref) -> dict[str, str]:
+        paths = self.instance_paths or ["/" + self.uuid]
+        if isinstance(ref, dict):
+            if set(ref) != set(paths):
+                raise ValueError(f"references must be given for exactly the instances of {self.path.name}: "
+                                 f"{paths}, not {list(ref)}")
+            return {p: ref[p] for p in paths}
+        if len(paths) > 1:
+            raise ValueError(f"{self.path.name} is used {len(paths)} times, so {ref!r} would repeat: pass one "
+                             f"reference per instance, e.g. sch.next_refs('R', {{path: start for path in "
+                             f"sch.instance_paths}})")
+        return {paths[0]: ref}
+
+    def add_symbol(self, lib_id: str, ref: str | dict[str, str], at, *, value: str | None = None,
                    footprint: str | None = None, rot: int = 0, mirror: str | None = None,
                    unit: int = 1, fields: dict | None = None, libs=None) -> PlacedSymbol:
+        """Place a library symbol. `ref`: a reference, or {instance path: reference} on a sheet
+        used several times (see `next_refs`)."""
+        refs = self._instance_refs(ref)
+        ref = next(iter(refs.values()))
         require_grid(tuple(at), what=f"{ref} position")
         if rot not in (0, 90, 180, 270):
             raise ValueError(f"rot must be 0, 90, 180 or 270, not {rot}")
@@ -293,8 +409,8 @@ class Schematic(Document):
         for n in dict.fromkeys(numbers):
             node.append(Node("pin", n, Node("uuid", new_uuid())))
         proj = Node("project", self.project.name)
-        for path in self.instance_paths or ["/" + self.uuid]:
-            proj.append(Node("path", path, Node("reference", ref), Node("unit", unit)))
+        for path, r in refs.items():
+            proj.append(Node("path", path, Node("reference", r), Node("unit", unit)))
         node.append(Node("instances", proj))
         self._insert_item(node)
         self.junctions_fix(placed.pins().values())
@@ -308,7 +424,7 @@ class Schematic(Document):
         ref, sep, pin = spec.partition(":")
         if not sep:
             raise ValueError(f"{spec!r}: a point is (x, y) or 'REF:PIN'")
-        units = [s for s in self.symbols() if s.ref == ref]
+        units = [s for s in self.symbols() if s.answers_to(ref)]
         if not units:
             raise KeyError(f"no symbol {ref} on {self.path.name}")
         errors = []
@@ -395,7 +511,13 @@ class Schematic(Document):
     def power(self, name: str, at, rot: int = 0) -> PlacedSymbol:
         """A power symbol (`power:<name>`, e.g. GND, +3V3, PWR_FLAG) whose pin sits at `at`."""
         prefix = "#FLG" if name == "PWR_FLAG" else "#PWR"
-        return self.add_symbol(f"power:{name}", self.next_ref(prefix), self.pin_point(at), rot=rot)
+        paths = self.instance_paths
+        if len(paths) > 1:
+            first = int(self.next_ref(prefix)[len(prefix):])
+            ref = self.next_refs(prefix, {p: first for p in paths})
+        else:
+            ref = self.next_ref(prefix)
+        return self.add_symbol(f"power:{name}", ref, self.pin_point(at), rot=rot)
 
     def no_connect(self, at) -> Node:
         x, y = self.pin_point(at)

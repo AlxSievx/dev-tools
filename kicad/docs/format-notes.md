@@ -61,6 +61,14 @@ and board up (`kicad-cli sch|pcb upgrade --force`).
 - Sheets: a `(sheet …)` node names its file in property `Sheetfile`; a symbol on
   that sheet has instance path `<parent path>/<sheet uuid>`.
 - Root `sheet_instances` and `embedded_fonts` come last; new items go before them.
+- A sheet file used several times (stock demo `complex_hierarchy`): each placed symbol
+  has one `(path …)` per instance under `instances`, each with its own `(reference …)`
+  (`RV201` / `RV301`); the `Reference` property shows one of them. Power symbols too
+  (`#PWR0207` / `#PWR0307`).
+- Page numbers: the root's is `sheet_instances → path "/" → page`; a sub-sheet's is in
+  the parent's `(sheet …)` node: `instances → project → path "<parent path>" → page`.
+- Hidden field: `(hide yes)` right after the property's `(at …)`; shown = no `hide` node.
+  DNP: `(dnp yes)` before the symbol's `uuid`.
 
 ## Board
 
