@@ -59,6 +59,14 @@ refs = sch.next_refs("R", {p: int(pg) * 100 + 1 for p, pg in sch.instance_pages(
 sch.add_symbol("Device:R", refs, (25.4, 25.4))   # a sheet used several times needs one ref per instance
 sch.symbol("R301").refs; sch.symbol("R5").set_dnp(); sch.symbol("C3").show_field("Voltage")
 
+hb = sch.add_sheet("Halfbridge_U", "halfbridge.kicad_sch", (25.4, 25.4), (25.4, 20.32),
+                   pins=[("IN", "input", "left"), ("OUT", "output", "right")], page="5")
+sch.add_sheet("Halfbridge_V", "halfbridge.kicad_sch", (76.2, 25.4), (25.4, 20.32),
+              pins=[...], page="6", ref_start=601)   # same file again: its parts get R601… for this instance
+sch.wire("Halfbridge_U:IN", (12.7, 27.94)); hb.add_pin("EN", "input", "left", 10.16)
+child = hb.child(); child.label("IN", (40.64, 50.8), rot=180, kind="hierarchical", shape="input")
+project.next_page(); sch.sheet("Halfbridge_U").pages()
+
 board = project.document(project.pcb_path)
 board.outline_rect(0, 0, 60, 40, r=2)        # or outline_polygon([...])
 board.footprint("U1").move(20, 15); board.footprint("U1").rotate_to(90)
@@ -77,6 +85,9 @@ kt.register_library("footprint", "Mine", lib.path, "project", project)   # or sc
 - Rotations: schematic 0/90/180/270; board any angle, counter-clockwise on screen.
 - Parts from the schematic reach the board only through the user's F8; `add_footprint` is for board-only parts.
 - A library registered in a script is visible to lookups from the next run on.
+- Sheet pins: in the given order every 2.54 mm along their side, from the top (left/right)
+  or left (top/bottom) corner; the child needs a hierarchical label of the same name.
+  Not yet: sheets on a sheet that is itself used several times, reusing a file that holds sheets.
 - The global library tables are never written while KiCad runs; `register_library`
   prints the line for the user to add instead.
 - Raw nodes: `kt.Node`, `node.get("at")`, `node.set(i, v)`, `node.append(kt.Node(...))`;

@@ -277,8 +277,55 @@ class Schematic(Document):
         return len(self.root.items)
 
     def _insert_item(self, node: Node) -> Node:
-        """Add a drawing item before `sheet_instances`, as KiCad orders them."""
-        return self.root.insert(self._index_of("sheet_instances"), node)
+        """Add a drawing item before `sheet_instances` / `embedded_fonts`, as KiCad orders them."""
+        return self.root.insert(min(self._index_of("sheet_instances"), self._index_of("embedded_fonts")), node)
+
+    # ---- sub-sheets
+    def sheet_symbols(self) -> list:
+        from kt.sheets import Sheet
+        return [Sheet(self, n) for n in self.root.all("sheet")]
+
+    def sheet(self, name: str):
+        for s in self.sheet_symbols():
+            if s.name == name:
+                return s
+        raise KeyError(f"no sheet {name!r} on {self.path.name}")
+
+    def add_sheet(self, name: str, file: str, at, size, *, pins=(), page: str | None = None,
+                  ref_start: int | None = None):
+        """A sheet symbol showing `file` (relative to this sheet). A new file is created; an existing
+        one gets a further instance, its parts new references from `ref_start` on."""
+        from kt import sheets
+        at, size = tuple(at), tuple(size)
+        require_grid(at, (at[0] + size[0], at[1] + size[1]), what=f"sheet {name}")
+        paths = self.instance_paths or ["/" + self.uuid]
+        if len(paths) > 1:
+            raise NotImplementedError(f"{self.path.name} is used {len(paths)} times; "
+                                      "sheets on a reused sheet are not supported yet")
+        if any(s.name == name for s in self.sheet_symbols()):
+            raise ValueError(f"{self.path.name} already has a sheet named {name!r}")
+        placed, count = [], {}
+        for pin_name, shape, side in pins:
+            count[side] = count.get(side, 0) + 1
+            point = sheets.pin_point(at, size, side, count[side] * sheets.PITCH)
+            placed.append(sheets.pin_node(pin_name, shape, side, point))
+        if len({p[0] for p in placed}) != len(placed):
+            raise ValueError(f"sheet {name}: pin names repeat")
+        child_path = (self.path.parent / file).resolve()
+        reuse = sheets.is_known(self.project, child_path)
+        if reuse and self.project.document(child_path).root.all("sheet"):
+            raise NotImplementedError(f"{file} contains sheets; using it again is not supported yet")
+        page = page or self.project.next_page()
+        node = sheets.sheet_node(name, file, at, size, self.project.name, paths[0], str(page))
+        for p in placed:
+            node.insert(node.items.index(node.get("instances")), p)
+        if not reuse:
+            self.project.document(child_path, root=sheets.child_root(self.root))
+        self._insert_item(node)
+        sheet = sheets.Sheet(self, node)
+        if reuse:
+            sheets.add_instance(self.project.sch(child_path), paths[0] + "/" + sheet.uuid, ref_start)
+        return sheet
 
     def embedded(self, lib_id: str) -> Node:
         for s in self.lib_symbols.all("symbol"):
@@ -426,7 +473,10 @@ class Schematic(Document):
             raise ValueError(f"{spec!r}: a point is (x, y) or 'REF:PIN'")
         units = [s for s in self.symbols() if s.answers_to(ref)]
         if not units:
-            raise KeyError(f"no symbol {ref} on {self.path.name}")
+            for sheet in self.sheet_symbols():
+                if sheet.name == ref:
+                    return sheet.pin(pin)
+            raise KeyError(f"no symbol or sheet {ref} on {self.path.name}")
         errors = []
         for s in units:
             try:
@@ -468,6 +518,7 @@ class Schematic(Document):
         """
         segs = self._segments()
         pins = [p for s in self.symbols() for p in s.pins().values()]
+        pins += [p for s in self.sheet_symbols() for p in s.pins().values()]
         have = {_pt(j.get("at").values()) for j in self.root.all("junction")}
         candidates = {p for s in segs for p in s} | set(pins)
         if points is not None:

@@ -212,6 +212,12 @@ class Project:
         from kt.schematic import sheet_tree
         return [self.document(p) for p in sheet_tree(self)]
 
+    def next_page(self) -> str:
+        """The highest page number used in the hierarchy + 1."""
+        from kt.schematic import hierarchy
+        numbers = [int(p) for p in hierarchy(self)[1].values() if str(p).isdigit()]
+        return str(max(numbers, default=1) + 1)
+
     def footprint_lib(self, path):
         """A footprint library folder (`.pretty`), inside the project or anywhere else."""
         from kt.parts import FootprintLib

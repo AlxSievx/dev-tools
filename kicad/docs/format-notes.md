@@ -67,6 +67,12 @@ and board up (`kicad-cli sch|pcb upgrade --force`).
   (`#PWR0207` / `#PWR0307`).
 - Page numbers: the root's is `sheet_instances → path "/" → page`; a sub-sheet's is in
   the parent's `(sheet …)` node: `instances → project → path "<parent path>" → page`.
+- Sheet symbol: `(sheet (at) (size) exclude_from_sim in_bom on_board dnp (stroke) (fill)
+  (uuid) (property "Sheetname" …) (property "Sheetfile" …) (pin "NAME" input (at x y angle)
+  (uuid) (effects … (justify left))) … (instances (project "p" (path "<parent>" (page "2")))))`.
+  Pin angle 180 on the left edge (justify left), 0 on the right (justify right).
+- A sub-sheet file KiCad 10 writes has no `sheet_instances` and no `embedded_fonts`; it
+  ends with its last drawing item.
 - Hidden field: `(hide yes)` right after the property's `(at …)`; shown = no `hide` node.
   DNP: `(dnp yes)` before the symbol's `uuid`.
 
