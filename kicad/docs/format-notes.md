@@ -82,6 +82,16 @@ and board up (`kicad-cli sch|pcb upgrade --force`).
 - Hidden field: `(hide yes)` right after the property's `(at …)`; shown = no `hide` node.
   DNP: `(dnp yes)` before the symbol's `uuid`.
 
+## Project file and drawing sheet
+
+- `.kicad_pro` is JSON. Drawing sheet: `schematic.page_layout_descr_file` and
+  `pcbnew.page_layout_descr_file`, path variables allowed (`${KIPRJMOD}/…`).
+  A missing or unreadable `.kicad_wks` falls back silently to KiCad's default frame.
+- `.kicad_wks` bitmap, both read by KiCad 10.0.1 (checked: `sch export svg` shows an
+  `<image>`): `(bitmap (name "") (pos x y [corner]) (scale s) (data "<base64 PNG>"))`
+  and the older `(pngdata (data "89 50 4E …"))`. Drawing-sheet texts appear in the SVG
+  as text, so a marker string proves the sheet was used.
+
 ## Board
 
 - A footprint's `(at x y rot)` is on the board; its pads, texts and graphics are

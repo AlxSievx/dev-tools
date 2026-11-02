@@ -72,6 +72,8 @@ sch.text_box("Nur einen Regler bestücken!", (30.48, 125.73), (50.8, 7.62), bord
 sch.rect((25.4, 25.4), (101.6, 76.2), style="dash")    # default solid dash dot dash_dot dash_dot_dot
 sch.title_block(title="Halfbridge", date="2026-11-02", rev="1.0", company="SciMo", comments={1: "AS"})
 sch.set_paper("A3"); sch.paper                         # ("A3", False); set_paper("A4", portrait=True)
+project.set_drawing_sheet("${KIPRJMOD}/templates/Frame.kicad_wks")   # schematic and board; .kicad_pro
+project.settings().data                                # the .kicad_pro as a dict, saved like the rest
 
 board = project.document(project.pcb_path)
 board.outline_rect(0, 0, 60, 40, r=2)        # or outline_polygon([...])
