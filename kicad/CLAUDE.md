@@ -81,6 +81,8 @@ kt.register_library("footprint", "Mine", lib.path, "project", project)   # or sc
 ## Rules
 
 - Never change a file the user has open in KiCad; ask them to close it.
+- Library lookup follows KiCad: libraries marked disabled in a table are not found
+  (hidden ones are). `DEVTOOLS_KICAD_CONFIG` points `kt` at another config folder.
 - Non-trivial scripts are files kept in the project (e.g. `scripts/`), not `exec` one-liners.
 - How a schematic or a part *should* look is the project's own style, not `kt`'s.
 

@@ -33,6 +33,13 @@ and board up (`kicad-cli sch|pcb upgrade --force`).
   relative to the board's `aux_axis_origin`, Y up, units 0.0001 inch;
   net names cut to their last 14 characters.
 
+## Library tables
+
+- An entry can carry `(disabled)`: KiCad does not load it; on a `(type "Table")`
+  entry the whole nested table is off. `(hidden)`: loaded and usable, only left out
+  of the chooser. A nickname may be registered again on its own beside a disabled
+  nested table (e.g. `power` while the stock `KiCad` table is disabled).
+
 ## Schematic
 
 - Coordinates in mm, Y down. Library symbols: Y up.
