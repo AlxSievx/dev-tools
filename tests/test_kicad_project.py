@@ -78,6 +78,28 @@ class ProjectTest(unittest.TestCase):
             self.assertIn('(paper "A3")', p.root_sch.read_text(encoding="utf-8"))
 
     @needs_kicad
+    def test_lock_in_nested_project_ignored(self):
+        # a reference project kept in a subfolder is open in KiCad: ours is still writable
+        with TempDir() as d:
+            p = new_project(d, "t")
+            other = new_project(d / "ref" / "other", "o")
+            lock_path(other.root_sch).write_text("someone")
+            set_paper(p.document(p.root_sch))
+            result = p.save()
+            self.assertEqual(result.written, [p.root_sch])
+
+    def test_nested_project_sheets_not_ours(self):
+        with TempDir() as d:
+            p = new_project(d, "t")
+            other = new_project(d / "ref" / "other", "o")
+            self.assertFalse(p.is_locked(other.root_sch))
+            lock_path(p.root_sch).write_text("someone")
+            self.assertTrue(p.is_locked(p.root_sch))
+            self.assertTrue(p.is_locked(d / "child.kicad_sch"))        # a new sheet of ours
+            self.assertTrue(p.is_locked(d / "sub" / "child.kicad_sch"))  # in a plain subfolder
+            self.assertFalse(p.is_locked(other.root_sch))
+
+    @needs_kicad
     def test_rejected_writes_nothing(self):
         with TempDir() as d:
             p = new_project(d, "t")

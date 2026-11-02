@@ -299,15 +299,23 @@ class Project:
     def _inside(self, path: Path) -> bool:
         return path.is_relative_to(self.dir)
 
+    def _own(self, path: Path) -> bool:
+        """Inside this project and not inside another project kept in a subfolder of it."""
+        path, top = Path(path).resolve(), self.dir.resolve()
+        if not path.is_relative_to(top):
+            return False
+        return not any(any(d.glob("*.kicad_pro")) for d in path.parents if d != top and d.is_relative_to(top))
+
     def schematic_open(self) -> bool:
-        """KiCad's schematic editor locks only the sheet it opened; it holds every sheet."""
-        return any(self.dir.rglob("~*.kicad_sch.lck"))
+        """KiCad's schematic editor locks only the sheet it opened; it holds every sheet.
+        Locks of other projects in subfolders (e.g. reference copies) do not count."""
+        return any(self._own(lock.with_name(lock.name[1:-4])) for lock in self.dir.rglob("~*.kicad_sch.lck"))
 
     def is_locked(self, path: Path) -> bool:
         path = Path(path)
         if locked(path):
             return True
-        return path.suffix == ".kicad_sch" and self._inside(path.resolve()) and self.schematic_open()
+        return path.suffix == ".kicad_sch" and self._own(path) and self.schematic_open()
 
     def _busy(self, docs) -> None:
         busy = [d.path for d in docs if self.is_locked(d.path)]
