@@ -33,6 +33,13 @@ and board up (`kicad-cli sch|pcb upgrade --force`).
   relative to the board's `aux_axis_origin`, Y up, units 0.0001 inch;
   net names cut to their last 14 characters.
 
+## Library tables
+
+- An entry can carry `(disabled)`: KiCad does not load it; on a `(type "Table")`
+  entry the whole nested table is off. `(hidden)`: loaded and usable, only left out
+  of the chooser. A nickname may be registered again on its own beside a disabled
+  nested table (e.g. `power` while the stock `KiCad` table is disabled).
+
 ## Schematic
 
 - Coordinates in mm, Y down. Library symbols: Y up.
@@ -54,6 +61,36 @@ and board up (`kicad-cli sch|pcb upgrade --force`).
 - Sheets: a `(sheet …)` node names its file in property `Sheetfile`; a symbol on
   that sheet has instance path `<parent path>/<sheet uuid>`.
 - Root `sheet_instances` and `embedded_fonts` come last; new items go before them.
+- A sheet file used several times (stock demo `complex_hierarchy`): each placed symbol
+  has one `(path …)` per instance under `instances`, each with its own `(reference …)`
+  (`RV201` / `RV301`); the `Reference` property shows one of them. Power symbols too
+  (`#PWR0207` / `#PWR0307`).
+- Page numbers: the root's is `sheet_instances → path "/" → page`; a sub-sheet's is in
+  the parent's `(sheet …)` node: `instances → project → path "<parent path>" → page`.
+- Sheet symbol: `(sheet (at) (size) exclude_from_sim in_bom on_board dnp (stroke) (fill)
+  (uuid) (property "Sheetname" …) (property "Sheetfile" …) (pin "NAME" input (at x y angle)
+  (uuid) (effects … (justify left))) … (instances (project "p" (path "<parent>" (page "2")))))`.
+  Pin angle 180 on the left edge (justify left), 0 on the right (justify right).
+- A sub-sheet file KiCad 10 writes has no `sheet_instances` and no `embedded_fonts`; it
+  ends with its last drawing item.
+- Note: `(text "…" (exclude_from_sim no) (at x y rot) (effects (font (size) [thickness]
+  [(bold yes)] [(italic yes)]) (justify left bottom)) (uuid))`; `\n` in the string is a line break.
+- Text box: `(text_box "…" (exclude_from_sim no) (at x y 0) (size w h) (margins …4)
+  (stroke) (fill) (effects …) (uuid))`; no border = stroke width `-0.0001` (type `none` is refused).
+- Rectangle: `(rectangle (start) (end) (stroke (width) (type dash)) (fill (type none)) (uuid))`.
+- `title_block`: after `paper`; children `title date rev company` then `(comment n "…")`, n 1–9.
+- Hidden field: `(hide yes)` right after the property's `(at …)`; shown = no `hide` node.
+  DNP: `(dnp yes)` before the symbol's `uuid`.
+
+## Project file and drawing sheet
+
+- `.kicad_pro` is JSON. Drawing sheet: `schematic.page_layout_descr_file` and
+  `pcbnew.page_layout_descr_file`, path variables allowed (`${KIPRJMOD}/…`).
+  A missing or unreadable `.kicad_wks` falls back silently to KiCad's default frame.
+- `.kicad_wks` bitmap, both read by KiCad 10.0.1 (checked: `sch export svg` shows an
+  `<image>`): `(bitmap (name "") (pos x y [corner]) (scale s) (data "<base64 PNG>"))`
+  and the older `(pngdata (data "89 50 4E …"))`. Drawing-sheet texts appear in the SVG
+  as text, so a marker string proves the sheet was used.
 
 ## Board
 

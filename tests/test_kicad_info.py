@@ -32,6 +32,22 @@ class InfoTest(unittest.TestCase):
             text = info(Project(demo))
             self.assertIn("missing on board: R99", text)
 
+    def test_every_instance_reference_listed(self):
+        """complex_hierarchy uses ampli_ht.kicad_sch twice: RV201 and RV301 are two parts."""
+        with TempDir() as d:
+            demo = copy_demo("complex_hierarchy", d)
+            for f in ("complex_hierarchy.kicad_sch", "ampli_ht.kicad_sch"):
+                cli.run("sch", "upgrade", "--force", demo / f)
+            cli.run("pcb", "upgrade", "--force", demo / "complex_hierarchy.kicad_pcb")
+            text = info(Project(demo))
+            symbols = text.split("\nsymbols\n", 1)[1].split("\nnets", 1)[0]
+            refs = re.findall(r"(?m)^  (\S+)  ", symbols)
+            self.assertTrue({"RV201", "RV301", "U201", "U301"} <= set(refs), refs)
+            step = next(l for l in text.splitlines() if l.startswith("in step:"))
+            # the demo's footprint names differ in library prefix only; no part may be missing
+            self.assertNotIn("missing on board", step[:200])
+            self.assertNotIn("not in schematic", step[:200])
+
     def test_symbols_and_nets_of_demo_circuit(self):
         with TempDir() as d:
             p = new_project(d, "t")

@@ -54,6 +54,27 @@ sch.label("SDA", "U2:5", kind="local")       # local | global | hierarchical
 sch.power("GND", (76.2, 66.04)); sch.no_connect("U2:7")
 sch.move("R1", (63.5, 63.5)); sch.rotate("R1", 90); sch.delete("R9")
 sch.symbol("R1").set_field("Value", "4k7"); u1.pins(); u1.pin("VI")
+sch.next_ref("R", start=301)                 # first free number from 301 on (whole project, all instances)
+refs = sch.next_refs("R", {p: int(pg) * 100 + 1 for p, pg in sch.instance_pages().items()})
+sch.add_symbol("Device:R", refs, (25.4, 25.4))   # a sheet used several times needs one ref per instance
+sch.symbol("R301").refs; sch.symbol("R5").set_dnp(); sch.symbol("C3").show_field("Voltage")
+sch.symbol("R301").set_ref("R301", "R350")    # one instance only; set_field("Reference") refuses on reused sheets
+
+hb = sch.add_sheet("Halfbridge_U", "halfbridge.kicad_sch", (25.4, 25.4), (25.4, 20.32),
+                   pins=[("IN", "input", "left"), ("OUT", "output", "right")], page="5")
+sch.add_sheet("Halfbridge_V", "halfbridge.kicad_sch", (76.2, 25.4), (25.4, 20.32),
+              pins=[...], page="6", ref_start=601)   # same file again: its parts get R601… for this instance
+sch.wire("Halfbridge_U:IN", (12.7, 27.94)); hb.add_pin("EN", "input", "left", 10.16)
+child = hb.child(); child.label("IN", (40.64, 50.8), rot=180, kind="hierarchical", shape="input")
+project.next_page(); sch.sheet("Halfbridge_U").pages()
+
+sch.add_text("UDC = AD_U_DC * 18.45", (30.48, 120.65), size=1.27, bold=False)   # a note, connects nothing
+sch.text_box("Nur einen Regler bestücken!", (30.48, 125.73), (50.8, 7.62), border=True)
+sch.rect((25.4, 25.4), (101.6, 76.2), style="dash")    # default solid dash dot dash_dot dash_dot_dot
+sch.title_block(title="Halfbridge", date="2026-11-02", rev="1.0", company="SciMo", comments={1: "AS"})
+sch.set_paper("A3"); sch.paper                         # ("A3", False); set_paper("A4", portrait=True)
+project.set_drawing_sheet("${KIPRJMOD}/templates/Frame.kicad_wks")   # schematic and board; .kicad_pro
+project.settings().data                                # the .kicad_pro as a dict, saved like the rest
 
 board = project.document(project.pcb_path)
 board.outline_rect(0, 0, 60, 40, r=2)        # or outline_polygon([...])
@@ -73,6 +94,9 @@ kt.register_library("footprint", "Mine", lib.path, "project", project)   # or sc
 - Rotations: schematic 0/90/180/270; board any angle, counter-clockwise on screen.
 - Parts from the schematic reach the board only through the user's F8; `add_footprint` is for board-only parts.
 - A library registered in a script is visible to lookups from the next run on.
+- Sheet pins: in the given order every 2.54 mm along their side, from the top (left/right)
+  or left (top/bottom) corner; the child needs a hierarchical label of the same name.
+  Not yet: sheets on a sheet that is itself used several times, reusing a file that holds sheets.
 - The global library tables are never written while KiCad runs; `register_library`
   prints the line for the user to add instead.
 - Raw nodes: `kt.Node`, `node.get("at")`, `node.set(i, v)`, `node.append(kt.Node(...))`;
@@ -81,6 +105,8 @@ kt.register_library("footprint", "Mine", lib.path, "project", project)   # or sc
 ## Rules
 
 - Never change a file the user has open in KiCad; ask them to close it.
+- Library lookup follows KiCad: libraries marked disabled in a table are not found
+  (hidden ones are). `DEVTOOLS_KICAD_CONFIG` points `kt` at another config folder.
 - Non-trivial scripts are files kept in the project (e.g. `scripts/`), not `exec` one-liners.
 - How a schematic or a part *should* look is the project's own style, not `kt`'s.
 

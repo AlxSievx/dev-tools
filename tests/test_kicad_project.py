@@ -1,4 +1,9 @@
+import base64
+import json
+import struct
+import tempfile
 import unittest
+import zlib
 from pathlib import Path
 
 from _kicad import TempDir, needs_kicad
@@ -101,6 +106,74 @@ class ProjectTest(unittest.TestCase):
             self.assertEqual(result.written, [p.pcb_path])
             self.assertEqual(result.reports[p.pcb_path].kind, "DRC")
             cli.drc(p.pcb_path)  # loads
+
+
+def _png() -> bytes:
+    raw = b"".join(b"\x00" + b"\xff\x00\x00" * 4 for _ in range(4))
+
+    def chunk(t, x):
+        return struct.pack(">I", len(x)) + t + x + struct.pack(">I", zlib.crc32(t + x) & 0xffffffff)
+    return (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", 4, 4, 8, 2, 0, 0, 0))
+            + chunk(b"IDAT", zlib.compress(raw)) + chunk(b"IEND", b""))
+
+
+MARK_WKS = ('(kicad_wks (version 20231118) (generator "kt")\n'
+            ' (setup (textsize 1.5 1.5) (linewidth 0.15) (textlinewidth 0.15)\n'
+            '  (left_margin 10) (right_margin 10) (top_margin 10) (bottom_margin 10))\n'
+            ' (bitmap (name "") (pos 50 50) (scale 10) (data "{}"))\n)\n')
+SHEET = "${KIPRJMOD}/templates/mark.kicad_wks"
+
+
+def export_svg(p) -> str:
+    with tempfile.TemporaryDirectory(prefix="kt-svg-") as tmp:
+        cli.run("sch", "export", "svg", "-o", tmp, p.root_sch, input_file=p.root_sch)
+        return "".join(f.read_text(encoding="utf-8") for f in Path(tmp).glob("*.svg"))
+
+
+class DrawingSheetTest(unittest.TestCase):
+    def make(self, d):
+        p = new_project(d, "t")
+        (d / "templates").mkdir()
+        (d / "templates" / "mark.kicad_wks").write_text(MARK_WKS.format(base64.b64encode(_png()).decode()),
+                                                         encoding="utf-8")
+        return p
+
+    @needs_kicad
+    def test_drawing_sheet_used_by_kicad(self):
+        with TempDir() as d:
+            p = self.make(d)
+            self.assertNotIn("<image", export_svg(p))        # control: KiCad's default sheet
+            p.set_drawing_sheet(SHEET)
+            result = p.save()
+            self.assertEqual(result.written, [p.pro_path])
+            self.assertIn("<image", export_svg(p))
+
+    @needs_kicad
+    def test_drawing_sheet_written_as_given(self):
+        with TempDir() as d:
+            p = self.make(d)
+            p.set_drawing_sheet(SHEET)
+            p.save()
+            data = json.loads(p.pro_path.read_text(encoding="utf-8"))
+            self.assertEqual(data["schematic"]["page_layout_descr_file"], SHEET)
+            self.assertEqual(data["pcbnew"]["page_layout_descr_file"], SHEET)
+            self.assertEqual(Project(d).settings().data["schematic"]["page_layout_descr_file"], SHEET)
+
+    def test_unchanged_settings_write_nothing(self):
+        with TempDir() as d:
+            p = self.make(d)
+            p.settings()
+            self.assertEqual(p.save().written, [])
+
+    def test_drawing_sheet_refused_while_open(self):
+        with TempDir() as d:
+            p = self.make(d)
+            lock_path(p.pro_path).write_text("someone")
+            before = p.pro_path.read_bytes()
+            p.set_drawing_sheet(SHEET)
+            with self.assertRaises(LockedError):
+                p.save()
+            self.assertEqual(p.pro_path.read_bytes(), before)
 
 
 if __name__ == "__main__":

@@ -6,6 +6,7 @@ directory.
 """
 import csv
 import io
+import json
 import os
 import shutil
 import subprocess
@@ -156,8 +157,40 @@ class Document:
         self._stamp = stamp(self.path)
 
 
+class ProjectFile(Document):
+    """The `.kicad_pro` (JSON). Checked on save by parsing it and by an ERC run on the staged project."""
+
+    def __init__(self, project, path: Path, root=None):
+        self.project = project
+        self.path = Path(path)
+        self.new = False
+        self._stamp = stamp(self.path)
+        self._loaded = read_text(self.path)
+        self.data = json.loads(self._loaded or "{}")
+        self._original = json.loads(self._loaded or "{}")
+
+    @property
+    def changed(self) -> bool:
+        return self.data != self._original
+
+    def text(self) -> str:
+        return json.dumps(self.data, indent=2) + "\n"
+
+    def check(self, staged: Path):
+        try:
+            json.loads(staged.read_text(encoding="utf-8"))
+        except ValueError as e:
+            raise cli.LoadError(staged, f"not valid JSON: {e}") from None
+        return None
+
+    def _saved(self) -> None:
+        self._loaded = read_text(self.path)
+        self._original = json.loads(self._loaded)
+        self._stamp = stamp(self.path)
+
+
 # file suffix -> Document subclass; filled in by the modules that define them
-DOCUMENT_TYPES: dict[str, type] = {}
+DOCUMENT_TYPES: dict[str, type] = {".kicad_pro": ProjectFile}
 
 
 @dataclass
@@ -211,6 +244,23 @@ class Project:
         """Every schematic sheet reachable from the root, root first."""
         from kt.schematic import sheet_tree
         return [self.document(p) for p in sheet_tree(self)]
+
+    def settings(self) -> ProjectFile:
+        """The project file's settings (`.data`, a dict), saved with the other documents."""
+        return self.document(self.pro_path)
+
+    def set_drawing_sheet(self, path: str) -> None:
+        """The drawing sheet (`.kicad_wks`) for the schematic and the board, written as given,
+        e.g. `${KIPRJMOD}/templates/Frame.kicad_wks`."""
+        data = self.settings().data
+        for section in ("schematic", "pcbnew"):
+            data.setdefault(section, {})["page_layout_descr_file"] = path
+
+    def next_page(self) -> str:
+        """The highest page number used in the hierarchy + 1."""
+        from kt.schematic import hierarchy
+        numbers = [int(p) for p in hierarchy(self)[1].values() if str(p).isdigit()]
+        return str(max(numbers, default=1) + 1)
 
     def footprint_lib(self, path):
         """A footprint library folder (`.pretty`), inside the project or anywhere else."""
@@ -325,9 +375,9 @@ def _check_all(project, docs: list[Document], tmp: Path) -> dict:
         for d in docs:
             if d.path.suffix in RESAVE:
                 _resave_check(staged[d.path])
-            elif d.path.name not in TABLE_FILES:
+            elif d.path.name not in TABLE_FILES and d.path.suffix != ".kicad_pro":
                 raise RejectedError(d.path, "kt has no check for this kind of file, so it does not write it")
-        if any(d.path.suffix == ".kicad_sch" and project._inside(d.path) for d in docs):
+        if any(d.path.suffix in (".kicad_sch", ".kicad_pro") and project._inside(d.path) for d in docs):
             reports[project.root_sch] = cli.erc(staged_dir / project.root_sch.name)
         if any(d.path == project.pcb_path for d in docs):
             reports[project.pcb_path] = cli.drc(staged_dir / project.pcb_path.name)
