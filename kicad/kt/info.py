@@ -51,8 +51,10 @@ def info(project) -> str:
             syms = [s for s in sheet.symbols() if not s.ref.startswith("#")]
             lines.append(f"  {sheet.path.relative_to(project.dir)}  {len(syms)} symbols")
             for s in syms:
-                if _flag(s.node, "on_board") and s.ref not in sch_parts:
-                    sch_parts[s.ref] = (s.value, s.fields().get("Footprint", ""), s.lib_id)
+                if not _flag(s.node, "on_board"):
+                    continue
+                for ref in dict.fromkeys(s.refs.values() or [s.ref]):     # one part per sheet instance
+                    sch_parts.setdefault(ref, (s.value, s.fields().get("Footprint", ""), s.lib_id))
         netlist = cli.netlist(project.root_sch)
         nets = netlist.get("nets").all("net") if netlist.get("nets") is not None else []
         unconnected = {}

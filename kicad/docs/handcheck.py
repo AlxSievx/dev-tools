@@ -40,7 +40,26 @@ def ldo3() -> Symbol:
     return s
 
 
+def stock_libraries() -> None:
+    """The hand check uses KiCad's stock parts. If the user's tables disable them, kt reads a
+    config of its own (KiCad itself is not changed; the sheets embed every symbol they use)."""
+    import atexit
+    import os
+    import shutil
+    from kt.libs import LibTables
+    if LibTables(None).has_symbol("Device:R"):
+        return
+    cfg = Path(tempfile.mkdtemp(prefix="kt-handcheck-config-"))
+    atexit.register(shutil.rmtree, cfg, True)
+    for table, head in (("sym-lib-table", "sym_lib_table"), ("fp-lib-table", "fp_lib_table")):
+        (cfg / table).write_text(f'({head}\n\t(version 7)\n\t(lib (name "KiCad")(type "Table")'
+                                 f'(uri "${{KICAD10_TEMPLATE_DIR}}/{table}")(options "")(descr ""))\n)\n',
+                                 encoding="utf-8")
+    os.environ["DEVTOOLS_KICAD_CONFIG"] = str(cfg)
+
+
 def build(dir: Path) -> "kt.Project":
+    stock_libraries()
     p = kt.new_project(dir, "handcheck")
     fp_lib = p.footprint_lib("Mine.pretty")
     fp_lib.add(sot23())
@@ -79,6 +98,30 @@ def build(dir: Path) -> "kt.Project":
     gx, gy = grounds[0].pins()["1"]
     sch.power("PWR_FLAG", (gx - 5.08, gy))
     sch.wire((gx - 5.08, gy), (gx, gy))
+
+    # one sheet file used twice: each instance gets its own references (R201 / R301)
+    sch.title_block(title="Hand check", rev="1", company="dev-tools", comments={1: "kt"})
+    sch.label("CH_IN", (111.76, vo[1]))
+    pins = [("IN", "input", "left")]
+    a = sch.add_sheet("Channel_A", "channel.kicad_sch", (50.8, 101.6), (25.4, 15.24), pins=pins, page="2")
+    child = a.child()
+    r = child.add_symbol("Device:R", child.next_ref("R", start=201), (63.5, 63.5),
+                         value="10k", footprint="Resistor_SMD:R_0603_1608Metric")
+    child.wire("R201:1", (63.5, 55.88))
+    child.label("IN", (63.5, 55.88), rot=90, kind="hierarchical", shape="input")
+    x, y = r.pin("2")
+    child.wire((x, y), (x, y + 5.08))
+    child.power("GND", (x, y + 5.08))
+    child.add_text("Kanal: Widerstand gegen GND (Überprüfung der Instanzen)", (50.8, 45.72))
+    sch.add_sheet("Channel_B", "channel.kicad_sch", (101.6, 101.6), (25.4, 15.24), pins=pins, page="3",
+                  ref_start=301)
+    for name in ("Channel_A", "Channel_B"):
+        px, py = sch.pin_point(f"{name}:IN")
+        sch.wire((px, py), (px - 7.62, py))
+        sch.label("CH_IN", (px - 7.62, py), rot=180)
+    sch.text_box("Two instances of channel.kicad_sch: R201 on page 2, R301 on page 3.",
+                 (50.8, 124.46), (76.2, 7.62))
+    sch.rect((43.18, 96.52), (134.62, 134.62), style="dash")
 
     board = p.document(p.pcb_path)
     board.outline_rect(0, 0, 60, 40, r=2)
