@@ -1,3 +1,4 @@
+import os
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -67,6 +68,64 @@ class LookupTest(unittest.TestCase):
                 '(uri "${KIPRJMOD}/my.kicad_sym")(options "")(descr ""))\n)\n', encoding="utf-8")
             sym = LibTables(p).symbol("Device:R")
         self.assertEqual(prop(sym, "Value"), "mine")
+
+
+def _table(path, head, *entries):
+    Path(path).write_text(f"({head}\n\t(version 7)\n" + "".join(f"\t{e}\n" for e in entries) + ")\n",
+                          encoding="utf-8")
+
+
+@needs_kicad
+@needs_share
+class DisabledTest(unittest.TestCase):
+    """KiCad does not offer libraries marked (disabled); kt must not find them either."""
+
+    def test_disabled_library_skipped(self):
+        with TempDir() as d:
+            p = new_project(d, "t")
+            (d / "my.kicad_sym").write_text(MY_SYM, encoding="utf-8")
+            _table(d / "sym-lib-table", "sym_lib_table",
+                   '(lib (name "Mine")(type "KiCad")(uri "${KIPRJMOD}/my.kicad_sym")(options "")(descr "")(disabled))')
+            with self.assertRaises(KeyError):
+                LibTables(p).symbol("Mine:R")
+
+    def test_disabled_nested_table_skipped(self):
+        with TempDir() as d:
+            table = d / "sym-lib-table"
+            _table(table, "sym_lib_table",
+                   '(lib (name "KiCad")(type "Table")(uri "${KICAD10_TEMPLATE_DIR}/sym-lib-table")'
+                   '(options "")(descr "")(disabled))')
+            with mock.patch.object(libs, "global_table", return_value=table):
+                self.assertFalse(LibTables(None).has_symbol("Device:R"))
+
+    def test_enabled_entry_wins_over_disabled_nested(self):
+        with TempDir() as d:
+            table = d / "sym-lib-table"
+            _table(table, "sym_lib_table",
+                   '(lib (name "KiCad")(type "Table")(uri "${KICAD10_TEMPLATE_DIR}/sym-lib-table")'
+                   '(options "")(descr "")(disabled))',
+                   '(lib (name "power")(type "KiCad")(uri "${KICAD10_SYMBOL_DIR}/power.kicad_sym")'
+                   '(options "")(descr ""))')
+            with mock.patch.object(libs, "global_table", return_value=table):
+                t = LibTables(None)
+                self.assertTrue(t.has_symbol("power:GND"))
+                self.assertFalse(t.has_symbol("Device:R"))
+
+    def test_hidden_library_still_found(self):
+        with TempDir() as d:
+            p = new_project(d, "t")
+            (d / "my.kicad_sym").write_text(MY_SYM, encoding="utf-8")
+            _table(d / "sym-lib-table", "sym_lib_table",
+                   '(lib (name "Mine")(type "KiCad")(uri "${KIPRJMOD}/my.kicad_sym")(options "")(descr "")(hidden))')
+            self.assertEqual(prop(LibTables(p).symbol("Mine:R"), "Value"), "mine")
+
+
+class ConfigDirTest(unittest.TestCase):
+    def test_config_dir_override(self):
+        with TempDir() as d:
+            with mock.patch.dict(os.environ, {"DEVTOOLS_KICAD_CONFIG": str(d)}):
+                self.assertEqual(libs.config_dir(), d)
+                self.assertEqual(libs.global_table("symbol"), d / "sym-lib-table")
 
 
 class ExpandTest(unittest.TestCase):

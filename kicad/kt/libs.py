@@ -17,6 +17,10 @@ TABLE_HEADS = {"symbol": "sym_lib_table", "footprint": "fp_lib_table"}
 
 
 def config_dir() -> Path:
+    """KiCad's user config folder; `DEVTOOLS_KICAD_CONFIG` points kt at another one (tests)."""
+    override = os.environ.get("DEVTOOLS_KICAD_CONFIG")
+    if override:
+        return Path(override)
     return Path(os.environ.get("APPDATA", Path.home())) / "kicad" / "10.0"
 
 
@@ -67,6 +71,8 @@ def _entries(table: Path, project_dir: Path | None, seen: set) -> list[tuple[str
     seen.add(key)
     out = []
     for lib in parse(read_text(table)).all("lib"):
+        if lib.get("disabled") is not None:      # KiCad does not offer it; (hidden) ones it still uses
+            continue
         name, kind, uri = (lib.get(k)[0] if lib.get(k) else "" for k in ("name", "type", "uri"))
         path = expand(uri, project_dir)
         if kind == "Table":
