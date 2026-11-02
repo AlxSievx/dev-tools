@@ -87,24 +87,22 @@ def hierarchy(project) -> tuple[dict[Path, list[str]], dict[str, str]]:
     """Every sheet file reachable from the root with its instance paths, and each path's page."""
     root_doc = project.document(project.root_sch)
     root_path = "/" + root_doc.root.get("uuid")[0]
-    tree = {root_doc.path: [root_path]}
+    tree: dict[Path, list[str]] = {}
     pages = {root_path: _root_page(root_doc.root)}
-    todo = [root_doc]
-    while todo:
-        doc = todo.pop(0)
+
+    def visit(doc, path: str, stack: tuple) -> None:
+        # every instance path is followed down on its own, so a file reached again later
+        # still passes the new path on to its sub-sheets
+        tree.setdefault(doc.path, []).append(path)
         for sheet in doc.root.all("sheet"):
-            file = _prop(sheet, "Sheetfile")[1]
-            child_path = (doc.path.parent / file).resolve()
-            sid = sheet.get("uuid")[0]
-            paths = []
-            for parent in tree[doc.path]:
-                paths.append(parent + "/" + sid)
-                pages[paths[-1]] = sheet_page(sheet, parent)
-            if child_path in tree:
-                tree[child_path] += paths
-            else:
-                tree[child_path] = paths
-                todo.append(project.document(child_path))
+            child_path = (doc.path.parent / _prop(sheet, "Sheetfile")[1]).resolve()
+            if child_path in stack:          # a sheet showing one of its ancestors: KiCad refuses it too
+                continue
+            child = path + "/" + sheet.get("uuid")[0]
+            pages[child] = sheet_page(sheet, path)
+            visit(project.document(child_path), child, stack + (child_path,))
+
+    visit(root_doc, root_path, (root_doc.path,))
     return tree, pages
 
 
@@ -217,7 +215,25 @@ class PlacedSymbol:
             out[pin.get("number")[0]] = f(at[0], at[1])
         return out
 
+    def set_ref(self, old: str, new: str) -> None:
+        """Rename one instance's reference (`old` -> `new`); the other instances keep theirs."""
+        hits = [path for path, r in self.refs.items() if r == old]
+        if not hits and self.ref != old:
+            raise KeyError(f"{self.ref} has no instance with reference {old!r} ({', '.join(self.refs.values())})")
+        if new != old and any(s.answers_to(new) for sheet in self.sch.project.sheets() for s in sheet.symbols()):
+            raise ValueError(f"reference {new!r} is already in use")
+        inst = self.node.get("instances")
+        for proj in inst.all("project") if inst is not None else []:
+            for path in proj.all("path"):
+                if path[0] in hits:
+                    path.get("reference").set(0, new)
+        if self.ref == old:
+            _prop(self.node, "Reference").set(1, new)
+
     def set_field(self, name: str, value: str) -> None:
+        if name == "Reference" and len(set(self.refs.values())) > 1:
+            raise ValueError(f"{self.ref} sits on a sheet used several times ({', '.join(self.refs.values())}); "
+                             "rename one instance with set_ref(old, new)")
         p = _prop(self.node, name)
         if p is None:
             x, y = self.at
@@ -400,6 +416,8 @@ class Schematic(Document):
         if len({p[0] for p in placed}) != len(placed):
             raise ValueError(f"sheet {name}: pin names repeat")
         child_path = (self.path.parent / file).resolve()
+        if child_path == self.path.resolve():
+            raise ValueError(f"sheet {name}: {file} cannot show itself")
         reuse = sheets.is_known(self.project, child_path)
         if reuse and self.project.document(child_path).root.all("sheet"):
             raise NotImplementedError(f"{file} contains sheets; using it again is not supported yet")
@@ -483,6 +501,8 @@ class Schematic(Document):
             if set(ref) != set(paths):
                 raise ValueError(f"references must be given for exactly the instances of {self.path.name}: "
                                  f"{paths}, not {list(ref)}")
+            if len(set(ref.values())) != len(ref):
+                raise ValueError(f"one reference per instance, all different: {ref}")
             return {p: ref[p] for p in paths}
         if len(paths) > 1:
             raise ValueError(f"{self.path.name} is used {len(paths)} times, so {ref!r} would repeat: pass one "

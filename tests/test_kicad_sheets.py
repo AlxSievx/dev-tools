@@ -3,7 +3,7 @@ import unittest
 
 from _kicad import TempDir, needs_kicad, needs_share
 from kt import cli
-from kt.project import new_project
+from kt.project import Project, new_project
 
 PINS = [("IN", "input", "left"), ("OUT", "output", "right")]
 
@@ -120,6 +120,71 @@ class SheetTest(unittest.TestCase):
         outer.child().add_sheet("Inner", "inner.kicad_sch", (25.4, 25.4), (25.4, 20.32))
         with self.assertRaises(NotImplementedError):
             self.root.add_sheet("Outer2", "outer.kicad_sch", (76.2, 25.4), (25.4, 20.32))
+
+    # ---- review fixes
+    def reused(self):
+        self.build()
+        self.root.add_sheet("Halfbridge_V", "halfbridge.kicad_sch", (101.6, 25.4), (25.4, 20.32),
+                            pins=PINS, page="3", ref_start=301)
+        return self.p.sch("halfbridge.kicad_sch")
+
+    def test_set_reference_on_reused_sheet_refused(self):
+        child = self.reused()
+        with self.assertRaises(ValueError) as cm:
+            child.symbol("R301").set_field("Reference", "R250")
+        self.assertIn("set_ref", str(cm.exception))
+
+    def test_set_ref_changes_one_instance(self):
+        child = self.reused()
+        child.symbol("R301").set_ref("R301", "R350")
+        self.p.save()
+        refs = netlist_refs(self.p)
+        self.assertTrue({"R201", "R350"} <= refs, refs)
+        self.assertNotIn("R301", refs)
+
+    def test_set_ref_refuses_a_used_reference(self):
+        child = self.reused()
+        with self.assertRaises(ValueError):
+            child.symbol("R301").set_ref("R301", "R201")
+
+    def test_sheet_showing_its_own_file_refused(self):
+        hb = self.root.add_sheet("A", "a.kicad_sch", (25.4, 25.4), (25.4, 20.32))
+        with self.assertRaises(ValueError):
+            hb.child().add_sheet("Self", "a.kicad_sch", (25.4, 25.4), (25.4, 20.32))
+
+    def test_unannotated_parts_get_one_reference_each(self):
+        hb = self.root.add_sheet("A", "same.kicad_sch", (25.4, 25.4), (25.4, 20.32), page="2")
+        child = hb.child()
+        child.add_symbol("Device:R", "R?", (50.8, 50.8))
+        child.add_symbol("Device:R", "R?", (76.2, 50.8))
+        self.root.add_sheet("B", "same.kicad_sch", (76.2, 25.4), (25.4, 20.32), page="3", ref_start=301)
+        new = sorted(s.refs[next(p for p in s.refs if p.endswith(self.root.sheet("B").uuid))]
+                     for s in child.symbols())
+        self.assertEqual(new, ["R301", "R302"])
+
+    def test_repeated_dict_refs_refused(self):
+        child = self.reused()
+        same = {path: "R401" for path in child.instance_paths}
+        with self.assertRaises(ValueError):
+            child.add_symbol("Device:R", same, (76.2, 76.2))
+
+    def test_reused_file_with_subsheets_reached_twice(self):
+        """root: X1 -> x (holds Y -> y), A -> a, and a also shows x. KiCad allows it;
+        y then has two instances, so a single string reference must be refused."""
+        x1 = self.root.add_sheet("X1", "x.kicad_sch", (25.4, 25.4), (25.4, 20.32), page="2")
+        x1.child().add_sheet("Y", "y.kicad_sch", (25.4, 25.4), (25.4, 20.32), page="3")
+        a = self.root.add_sheet("A", "a.kicad_sch", (76.2, 25.4), (25.4, 20.32), page="4")
+        node = x1.node.copy()
+        node.get("uuid").set(0, "11111111-2222-3333-4444-555555555555")
+        inst = node.get("instances").get("project").get("path")
+        inst.set(0, "/" + self.root.uuid + "/" + a.uuid)
+        inst.get("page").set(0, "5")
+        a.child()._insert_item(node)
+        self.p.save()
+        y = Project(self.d).sch("y.kicad_sch")
+        self.assertEqual(len(y.instance_paths), 2)
+        with self.assertRaises(ValueError):
+            y.add_symbol("Device:R", "R3", (50.8, 50.8))
 
 
 if __name__ == "__main__":

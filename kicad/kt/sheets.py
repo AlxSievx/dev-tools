@@ -163,14 +163,15 @@ def add_instance(child, new_path: str, ref_start: int | None) -> None:
     renamed: dict[str, str] = {}
     symbols = sorted(child.symbols(), key=lambda s: (_split_ref(s.ref)[0], _split_ref(s.ref)[1] or 0, s.unit))
     for s in symbols:
-        if s.ref not in renamed:
-            prefix, _ = _split_ref(s.ref)
-            renamed[s.ref] = child.next_ref(prefix, ref_start)
+        prefix, number = _split_ref(s.ref)
+        key = s.ref if number is not None else s.node.get("uuid")[0]   # unannotated ("R?"): one each
+        if key not in renamed:
+            renamed[key] = child.next_ref(prefix, ref_start)
         inst = s.node.get("instances")
         if inst is None:
             inst = s.node.append(Node("instances", Node("project", child.project.name)))
         proj = inst.get("project") or inst.append(Node("project", child.project.name))
-        proj.append(Node("path", new_path, Node("reference", renamed[s.ref]), Node("unit", s.unit)))
+        proj.append(Node("path", new_path, Node("reference", renamed[key]), Node("unit", s.unit)))
 
 
 def is_known(project, path: Path) -> bool:

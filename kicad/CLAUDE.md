@@ -58,6 +58,7 @@ sch.next_ref("R", start=301)                 # first free number from 301 on (wh
 refs = sch.next_refs("R", {p: int(pg) * 100 + 1 for p, pg in sch.instance_pages().items()})
 sch.add_symbol("Device:R", refs, (25.4, 25.4))   # a sheet used several times needs one ref per instance
 sch.symbol("R301").refs; sch.symbol("R5").set_dnp(); sch.symbol("C3").show_field("Voltage")
+sch.symbol("R301").set_ref("R301", "R350")    # one instance only; set_field("Reference") refuses on reused sheets
 
 hb = sch.add_sheet("Halfbridge_U", "halfbridge.kicad_sch", (25.4, 25.4), (25.4, 20.32),
                    pins=[("IN", "input", "left"), ("OUT", "output", "right")], page="5")
