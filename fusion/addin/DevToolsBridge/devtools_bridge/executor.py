@@ -3,6 +3,9 @@
 A job whose `run()` (or handler) returns a generator is advanced one `next()`
 per `step()`; between steps control goes back to Fusion, which repaints and
 handles events. The shell re-fires its custom event while `step()` returns True.
+
+`watch()`, if given, is called as a job starts and returns a check; when the job
+fails, the check's text (what the job left behind) is added to the error.
 """
 import ast
 import inspect
@@ -55,12 +58,15 @@ def _echo_last(source: str):
 class Session:
     def __init__(self, base: Callable[[], dict],
                  handlers: dict[str, Callable[[dict, dict], object]] | None = None,
-                 reload_dt: Callable[[], object | None] = lambda: None):
+                 reload_dt: Callable[[], object | None] = lambda: None,
+                 watch: Callable[[], Callable[[], str]] | None = None):
         self.base = base
         self.handlers = handlers or {}
         self.reload_dt = reload_dt
+        self.watch = watch
         self.ns: dict = {}
         self._pending: tuple[Job, object] | None = None
+        self._leftovers: Callable[[], str] | None = None
 
     def step(self, queue: JobQueue) -> bool:
         if self._pending:
@@ -79,13 +85,23 @@ class Session:
             work()
         except BaseException as e:
             self._pending = None
-            tb = _user_traceback(e)
+            tb = _user_traceback(e) + self._left_behind()
             job.write(tb)
             queue.finish(job, error=tb)
         finally:
             sys.stdout, sys.stderr = out, err
 
+    def _left_behind(self) -> str:
+        check, self._leftovers = self._leftovers, None
+        if not check:
+            return ""
+        try:
+            return check()
+        except Exception as e:
+            return f"note: could not check what the job left behind: {type(e).__name__}: {e}\n"
+
     def _start(self, queue: JobQueue, job: Job) -> None:
+        self._leftovers = None
         if job.kind == "reset":
             self.ns.clear()
             queue.finish(job, result="reset")
@@ -94,6 +110,8 @@ class Session:
         dt = self.reload_dt()
         if dt is not None:
             self.ns["dt"] = dt
+        if self.watch:
+            self._leftovers = self.watch()
         if job.kind == "shot":
             return self._follow(queue, job, self.handlers["shot"](self.ns, job.payload))
         if job.kind != "script":

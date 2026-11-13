@@ -27,7 +27,8 @@ def cm(v_mm: float) -> float:
 
 
 def bodies(design=None) -> list[dict]:
-    """Every body of every component: volume in mm³, bounding box (dx, dy, dz) in mm."""
+    """Every body of every component: volume in mm³, bounding box size (dx, dy, dz) and
+    its low corner in mm, both in the component's own coordinates."""
     rows = []
     for comp in _design(design).allComponents:
         for body in comp.bRepBodies:
@@ -39,6 +40,7 @@ def bodies(design=None) -> list[dict]:
                 "bbox_mm": tuple(round(mm(hi - lo), 4) for lo, hi in (
                     (box.minPoint.x, box.maxPoint.x), (box.minPoint.y, box.maxPoint.y),
                     (box.minPoint.z, box.maxPoint.z))),
+                "min_mm": tuple(round(mm(v), 4) for v in (box.minPoint.x, box.minPoint.y, box.minPoint.z)),
             })
     return rows
 
@@ -83,11 +85,13 @@ def info(design=None) -> str:
         f"units {design.unitsManager.defaultLengthUnits}",
         f"counts    {design.allComponents.count} components · {len(rows)} bodies"
         + (f" · {design.timeline.count} timeline items" if parametric else ""),
-        "bodies    (volume mm³, bbox dx × dy × dz mm)",
+        "bodies    (volume mm³, bbox dx × dy × dz mm, from its low corner)",
     ]
     for r in rows[:MAX_ROWS]:
         dx, dy, dz = r["bbox_mm"]
-        lines.append(f"  {r['component']}/{r['body']}  {r['volume_mm3']:.1f}  {dx:g} × {dy:g} × {dz:g}")
+        x, y, z = r["min_mm"]
+        lines.append(f"  {r['component']}/{r['body']}  {r['volume_mm3']:.1f}  {dx:g} × {dy:g} × {dz:g}"
+                     f"  from ({x:g}, {y:g}, {z:g})")
     if len(rows) > MAX_ROWS:
         lines.append(f"  … {len(rows) - MAX_ROWS} more, see dt.bodies()")
     user = list(design.userParameters)
@@ -101,4 +105,30 @@ def info(design=None) -> str:
     problems = health(design)
     lines.append("health    ok" if not problems else f"health    {len(problems)} problems")
     lines.extend(f"  {p}" for p in problems[:MAX_ROWS])
+    lines.extend(_clash_lines(design))
     return "\n".join(lines)
+
+
+def _clash_lines(design) -> list[str]:
+    from .measure import CLASH_LIMIT, _all, clashes
+    visible = sum(1 for _, b in _all(design) if b.isVisible)
+    if visible < 2:
+        return []
+    if visible > CLASH_LIMIT:
+        return [f"clashes   not checked ({visible} visible bodies), see dt.clashes()"]
+    found = clashes(design=design)
+    return [f"clashes   {len(found) or 'none'}"] + [f"  {a} ∩ {b}  {v:g} mm³" for a, b, v in found]
+
+
+def trim(count: int, design=None) -> int:
+    """Delete the timeline items from position `count` on (what a failed job left
+    behind, as its note says). Returns how many were deleted."""
+    timeline = _design(design).timeline
+    if not 0 <= count <= timeline.count:
+        raise ValueError(f"timeline has {timeline.count} items; cannot trim to {count}")
+    extra = timeline.count - count
+    if extra:
+        timeline.markerPosition = count
+        timeline.deleteAllAfterMarker()
+        timeline.moveToEnd()
+    return extra

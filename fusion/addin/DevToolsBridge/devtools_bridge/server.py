@@ -15,6 +15,7 @@ from .jobs import JobQueue
 
 MAX_BODY = 10 * 1024 * 1024
 JOB_PATH = re.compile(r"^/jobs/([0-9a-f]{8})$")
+SECTION = re.compile(r"^[xyz]=-?\d+(\.\d+)?$")
 
 
 def make_server(queue: JobQueue, token: str, notify: Callable[[], None],
@@ -88,8 +89,14 @@ def make_server(queue: JobQueue, token: str, notify: Callable[[], None],
                     views = body.get("views")
                     if not views or not isinstance(views, list) or not all(isinstance(v, str) for v in views):
                         return self._send(400, {"error": "views must be a non-empty list of names"})
-                    payload = {"views": views, "width": int(body.get("width") or 1600),
-                               "height": int(body.get("height") or 1000), "dir": body.get("dir")}
+                    payload = {"views": views, "width": int(body.get("width") or 1024),
+                               "height": int(body.get("height") or 640), "dir": body.get("dir")}
+                    if "section" in body:
+                        section = body["section"]
+                        if not isinstance(section, str) or not SECTION.match(section):
+                            return self._send(400, {"error": "section must look like y=12.5 (axis=mm)"})
+                        payload["section"] = section
+                        payload["flip"] = bool(body.get("flip"))
                     return self._submit("shot", payload, label)
                 given = [k for k in ("script", "path") if k in body]
                 if len(given) != 1 or not isinstance(body[given[0]], str):

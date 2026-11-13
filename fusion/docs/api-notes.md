@@ -250,6 +250,32 @@ Checked on 2705.1.30.
 
 ---
 
+## Measuring and sections
+
+Checked on 2705.1.30; `dt.measure` wraps these.
+
+- `app.measureManager.measureMinimumDistance(a, b).value` — cm, 0 when touching
+  or overlapping. Pass proxies (`occ.bRepBodies`) for bodies in occurrences, or
+  the distance is taken in the component's own frame.
+- Interference: `design.analyzeInterference(design.createInterferenceInput(coll))`;
+  each result has `entityOne`, `entityTwo`, `interferenceBody.volume` (cm³).
+- `body.physicalProperties`: `mass` (kg, from the material), `volume` (cm³),
+  `area` (cm²), `centerOfMass`.
+- Hole or boss: for a cylindrical face, the normal at `pointOnFace` points
+  **towards** the axis for a hole. Fusion often splits a full cylinder into two
+  half faces; group by axis and radius and add the areas.
+- **Sketching on a face projects its edges**: a sketch on the top of a plate with
+  a hole has the hole's circle as a profile too. Pick the profile by area or
+  centroid, never `profiles.item(0)`.
+- Section analysis: `design.analyses.sectionAnalyses.createInput(plane, distance_cm)`
+  (a float in cm, not a `ValueInput`), `.flip`, `add()`. It hides the side
+  towards the plane's normal (`xZConstructionPlane` normal is +Y), is not a
+  timeline item, and `deleteMe()` removes it.
+- `timeline.markerPosition = n; timeline.deleteAllAfterMarker()` deletes
+  everything from item `n` on (`dt.trim(n)`).
+
+---
+
 ## Gotchas found on real projects
 
 Collected on the Crawler project, Fusion 2705.x, Personal licence.

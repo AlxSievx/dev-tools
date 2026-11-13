@@ -93,7 +93,35 @@ def _reload_dt():
 
 
 def _shot(ns: dict, payload: dict):
-    return ns["dt"].shot(payload["views"], payload["width"], payload["height"], payload["dir"])
+    return ns["dt"].shot(payload["views"], payload["width"], payload["height"], payload["dir"],
+                         section=payload.get("section"), flip=payload.get("flip", False))
+
+
+def _watch():
+    """Remember the open documents and the active timeline; the check returned
+    says what a failed job left behind."""
+    docs = _app.documents.count
+    design = _base()["design"]
+    timeline = None
+    if design and design.designType == adsk.fusion.DesignTypes.ParametricDesignType:
+        timeline = design.timeline
+        count, marker = timeline.count, timeline.markerPosition
+
+    def check() -> str:
+        notes = []
+        extra = _app.documents.count - docs
+        if extra > 0:
+            active = _app.activeDocument.name if _app.activeDocument else "-"
+            notes.append(f"the job opened {extra} document(s) that are still open (active: {active})")
+        if timeline is not None and timeline.isValid and timeline.count > count:
+            new = [timeline.item(i).name for i in range(count, min(timeline.count, count + 8))]
+            more = timeline.count - count - len(new)
+            names = ", ".join(new) + (f", … {more} more" if more else "")
+            undo = f"; dt.trim({count}) deletes them" if marker == count else ""
+            notes.append(f"{timeline.count - count} new timeline item(s) in "
+                         f"{design.parentDocument.name}: {names}{undo}")
+        return "".join(f"note: {n}\n" for n in notes)
+    return check
 
 
 def _status() -> dict:
@@ -145,7 +173,7 @@ def run(context):
     _app = adsk.core.Application.get()
     try:
         _queue = JobQueue(WORK_DIR)
-        _session = Session(_base, handlers={"shot": _shot}, reload_dt=_reload_dt)
+        _session = Session(_base, handlers={"shot": _shot}, reload_dt=_reload_dt, watch=_watch)
         port = _port()
         # bind first: if another copy holds the port, fail before touching Fusion
         _server = make_server(_queue, _token(), _notify, _status, port=port)

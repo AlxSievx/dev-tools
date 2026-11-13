@@ -3,6 +3,7 @@
 Works only in documents it creates and closes them unsaved. Prints one
 `PASS|FAIL <name>` line per check; exit 0 only if all pass.
 """
+import ast
 import hashlib
 import io
 import tempfile
@@ -39,6 +40,26 @@ fi = r.features.filletFeatures.createInput()
 fi.edgeSetInputs.addConstantRadiusEdgeSet(x_edges, adsk.core.ValueInput.createByString("st_r"), True)
 r.features.filletFeatures.add(fi)
 print(x_edges.count, round(dt.bodies(d)[0]["volume_mm3"], 3))
+'''
+
+MEASURE = '''
+import adsk.core, adsk.fusion
+P = adsk.core.Point3D.create
+st_m = app.documents.add(adsk.core.DocumentTypes.FusionDesignDocumentType)
+d = adsk.fusion.Design.cast(app.activeProduct)
+r = d.rootComponent
+NEW = adsk.fusion.FeatureOperations.NewBodyFeatureOperation
+sk = r.sketches.add(r.xYConstructionPlane)
+sk.sketchCurves.sketchLines.addTwoPointRectangle(P(0, 0, 0), P(4, 2, 0))
+sk.sketchCurves.sketchCircles.addByCenterRadius(P(1, 1, 0), 0.25)
+prof = max(sk.profiles, key=lambda p: p.areaProperties().area)
+r.features.extrudeFeatures.addSimple(prof, adsk.core.ValueInput.createByString("10 mm"), NEW).bodies.item(0).name = "st_plate"
+sk = r.sketches.add(r.xYConstructionPlane)
+sk.sketchCurves.sketchLines.addTwoPointRectangle(P(3.5, -1, 0), P(5, 1, 0))
+r.features.extrudeFeatures.addSimple(sk.profiles.item(0), adsk.core.ValueInput.createByString("3 mm"), NEW).bodies.item(0).name = "st_block"
+n = d.timeline.count
+r.sketches.add(r.xZConstructionPlane)
+(dt.holes("st_plate"), dt.clashes(), dt.gap("st_plate", "st_block"), dt.trim(n), d.timeline.count == n)
 '''
 
 LONG = '''
@@ -146,6 +167,35 @@ def selftest(client: Client, quick: bool = False) -> int:
         digests = {hashlib.sha256(f.read_bytes()).hexdigest() for f in files if f.exists()}
         return rc == 0 and len(files) == 4 and len(digests) == 4, f"{out_dir}"
 
+    def measure():
+        code, out = t.job(MEASURE)
+        if code != 0:
+            return False, out[-300:]
+        holes, clashes, gap, trimmed, ok = ast.literal_eval(out.strip())
+        want_hole = {"kind": "hole", "d_mm": 5.0, "axis": "z", "at_mm": (10.0, 10.0),
+                     "span_mm": (0.0, 10.0), "sweep_deg": 360.0}
+        good = (holes == [want_hole] and clashes == [("st_plate", "st_block", 150.0)]
+                and gap == 0.0 and trimmed == 1 and ok)
+        return good, "" if good else out.strip()[:300]
+
+    def section_shot():
+        out_dir = Path(tempfile.mkdtemp(prefix="devtools-selftest-"))
+        code, reply = client.request("POST", "/screenshot", {
+            "views": ["back"], "width": 640, "height": 400, "dir": str(out_dir), "section": "y=10"})
+        rc = follow(client, reply["id"], wait_cap=60, out=io.StringIO())
+        left = t.job("design.analyses.sectionAnalyses.count")
+        return rc == 0 and (out_dir / "back.png").exists() and left == (0, "0\n"), f"{rc} {left}"
+
+    def failure_note():
+        code, out = t.job("import adsk.core\n"
+                          "st_f = app.documents.add(adsk.core.DocumentTypes.FusionDesignDocumentType)\n"
+                          "root.sketches.add(root.xYConstructionPlane)\n"
+                          "raise ValueError('half built')")
+        t.job("st_f.close(False)")
+        good = (code == 1 and "note: the job opened 1 document" in out
+                and "1 new timeline item(s)" in out and "dt.trim(" in out)
+        return good, "" if good else out[-300:]
+
     def wait_cap_and_cancel():
         code, reply = client.request("POST", "/jobs", {"script": "import time\ndef run(c):\n"
                                                        "    for _ in range(6):\n"
@@ -165,7 +215,9 @@ def selftest(client: Client, quick: bool = False) -> int:
         return False, "no error from port 1"
 
     def cleanup():
-        code, out = t.job("st_doc.close(False) if 'st_doc' in globals() else None\n'closed'")
+        code, out = t.job("for st_name in ('st_m', 'st_doc'):\n"
+                          "    if st_name in globals() and globals()[st_name].isValid:\n"
+                          "        globals()[st_name].close(False)\n'closed'")
         return code == 0, ""
 
     t.check("health", health)
@@ -178,6 +230,9 @@ def selftest(client: Client, quick: bool = False) -> int:
     t.check("design follows the active document", doc_switch)
     t.check("parametric part in numbers", part)
     t.check("four confirmed screenshots", shots)
+    t.check("holes, clashes, gap, trim", measure)
+    t.check("section screenshot leaves no analysis", section_shot)
+    t.check("a failed job says what it left behind", failure_note)
     t.check("wait cap, wait again, cancel", wait_cap_and_cancel)
     t.check("unreachable bridge reported", unreachable)
     t.check("cleanup", cleanup)

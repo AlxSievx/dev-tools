@@ -6,9 +6,11 @@ camera lands before `saveAsImageFile` (checked on 2705.1.30); the read-back
 and the duplicate check still guard against a wrong image.
 """
 import hashlib
+import re
 from pathlib import Path
 
 import adsk.core
+import adsk.fusion
 
 # name → (direction from target to eye, up vector)
 VIEWS = {
@@ -54,11 +56,42 @@ def _looks_along(vp, name: str) -> float:
     return v.dotProduct(_unit(*VIEWS[name][0]))
 
 
-def shot(views: list[str], width: int, height: int, out_dir: str):
-    """Write <out_dir>/<view>.png per view; returns the paths. "current" = as on screen."""
+def _parse_section(section: str) -> tuple[str, float]:
+    m = re.fullmatch(r"([xyz])=(-?\d+(?:\.\d+)?)", section or "")
+    if not m:
+        raise ValueError(f"section wants axis=mm, e.g. 'y=12.5', not {section!r}")
+    return m.group(1), float(m.group(2))
+
+
+def _cut(section: str, flip: bool):
+    """A section analysis through the root plane across `axis` at `mm`. It hides the
+    side towards +axis (with flip: towards −axis); it is not a timeline item."""
+    axis, at_mm = _parse_section(section)
+    app = adsk.core.Application.get()
+    design = adsk.fusion.Design.cast(app.activeProduct)
+    if not design:
+        raise RuntimeError("section needs an active design")
+    root = design.rootComponent
+    plane = {"x": root.yZConstructionPlane, "y": root.xZConstructionPlane,
+             "z": root.xYConstructionPlane}[axis]
+    analyses = design.analyses.sectionAnalyses
+    cut = analyses.createInput(plane, at_mm / 10.0)
+    cut.flip = flip
+    return analyses.add(cut)
+
+
+def shot(views: list[str], width: int, height: int, out_dir: str,
+         section: str | None = None, flip: bool = False):
+    """Write <out_dir>/<view>.png per view; returns the paths. "current" = as on screen.
+
+    section="y=10" cuts the model there for these pictures only (the side towards
+    +y is hidden; flip=True hides the other side); look from that side to see the cut.
+    """
     unknown = [v for v in views if v != CURRENT and v not in VIEWS]
     if unknown:
         raise ValueError(f"unknown view(s) {unknown}; known: {CURRENT}, {', '.join(VIEWS)}")
+    if section:
+        _parse_section(section)
     vp = adsk.core.Application.get().activeViewport
     if not vp:
         raise RuntimeError("no active viewport")
@@ -66,8 +99,11 @@ def shot(views: list[str], width: int, height: int, out_dir: str):
     out.mkdir(parents=True, exist_ok=True)
     saved_cam, saved_style = vp.camera, vp.visualStyle
     paths, digests = [], {}
+    cut = None
     try:
         vp.visualStyle = adsk.core.VisualStyles.ShadedWithVisibleEdgesOnlyVisualStyle
+        if section:
+            cut = _cut(section, flip)
         for name in views:
             if name != CURRENT:
                 _orient(vp, name)
@@ -89,6 +125,8 @@ def shot(views: list[str], width: int, height: int, out_dir: str):
             paths.append(str(path))
             print(f"saved {name}")
     finally:
+        if cut is not None and cut.isValid:
+            cut.deleteMe()
         saved_cam.isSmoothTransition = False
         vp.camera = saved_cam
         vp.visualStyle = saved_style

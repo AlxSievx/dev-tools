@@ -4,6 +4,7 @@ Script output goes to stdout, messages to stderr. Exit codes: 0 done,
 1 script failed, 2 bridge unreachable / job unknown, 3 auth, 4 still running,
 5 usage.
 """
+import re
 import sys
 import tempfile
 import time
@@ -15,6 +16,7 @@ DONE, FAILED, UNKNOWN, STILL_RUNNING, USAGE = 0, 1, 2, 4, 5
 WAIT_CAP = 540.0
 MAX_LINES = 200
 STALL = 15.0      # s a job may sit queued with nothing running before we say so
+SECTION = re.compile(r"^[xyz]=-?\d+(\.\d+)?$")
 
 
 def say(msg: str) -> None:
@@ -118,8 +120,17 @@ def cmd_shot(args) -> int:
         return USAGE
     out_dir = Path(args.out).resolve() if args.out else (
         Path(tempfile.gettempdir()) / "devtools" / "fusion" / "shots" / time.strftime("%Y%m%d-%H%M%S"))
-    return _submit(args, "/screenshot", {"views": args.views, "width": width,
-                                         "height": height, "dir": str(out_dir)})
+    body = {"views": args.views, "width": width, "height": height, "dir": str(out_dir)}
+    if args.section:
+        if not SECTION.match(args.section):
+            say(f"--section wants AXIS=MM, e.g. y=12.5, not {args.section!r}")
+            return USAGE
+        body.update(section=args.section, flip=args.flip)
+    return _submit(args, "/screenshot", body)
+
+
+def cmd_inspect(args) -> int:
+    return _submit(args, "/jobs", {"script": f"print(dt.inspect({args.body!r}))"})
 
 
 def cmd_wait(args) -> int:
@@ -193,7 +204,14 @@ def add_parser(tools) -> None:
                    help="front back left right top bottom iso-top-right iso-top-left "
                         "iso-bottom-right iso-bottom-left current")
     c.add_argument("--out", help="directory for the PNGs (default: a new folder under %%TEMP%%)")
-    c.add_argument("--size", default="1600x1000", help="WxH in pixels (default 1600x1000)")
+    c.add_argument("--size", default="1024x640",
+                   help="WxH in pixels (default 1024x640; 1600x1000 for fine detail)")
+    c.add_argument("--section", metavar="AXIS=MM",
+                   help="cut the view at a plane, e.g. y=10: hides the side towards +y")
+    c.add_argument("--flip", action="store_true", help="with --section: hide the other side")
+    waiting(c)
+    c = add("inspect", cmd_inspect, "one body in numbers: size, mass, holes and bosses")
+    c.add_argument("body", help="body name, component/body or occurrence/body")
     waiting(c)
     c = add("wait", cmd_wait, "follow a running job again")
     c.add_argument("id")

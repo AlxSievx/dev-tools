@@ -207,6 +207,24 @@ class CliTest(unittest.TestCase):
         self.assertEqual(out.splitlines(), [str(out_dir / "iso-top-right.png"), str(out_dir / "top.png")])
         self.assertEqual((seen[0]["width"], seen[0]["height"]), (800, 600))
 
+    def test_shot_defaults_and_section(self):
+        seen = []
+        self.serve(lambda job: (seen.append(job.payload), ([], None))[1])
+        self.assertEqual(self.cli("fusion", "shot", "top", "--section", "z=4.5", "--flip")[0], 0)
+        self.assertEqual((seen[0]["width"], seen[0]["height"]), (1024, 640))
+        self.assertEqual((seen[0]["section"], seen[0]["flip"]), ("z=4.5", True))
+        self.assertEqual(self.cli("fusion", "shot", "top")[0], 0)
+        self.assertNotIn("section", seen[1])
+        code, out, err = self.cli("fusion", "shot", "top", "--section", "q=1")
+        self.assertEqual(code, 5)
+        self.assertIn("AXIS=MM", err)
+
+    def test_inspect(self):
+        seen = []
+        self.serve(lambda job: (seen.append(job.payload), (None, None))[1])
+        self.assertEqual(self.cli("fusion", "inspect", "Comp1:1/Body 1")[0], 0)
+        self.assertEqual(seen, [{"script": "print(dt.inspect('Comp1:1/Body 1'))"}])
+
     def test_info_and_reset(self):
         seen = []
         self.serve(lambda job: (seen.append((job.kind, job.payload)), (None, None))[1])

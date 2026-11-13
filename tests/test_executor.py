@@ -134,6 +134,31 @@ class ExecutorTest(unittest.TestCase):
         self.assertEqual((job.state, job.result), ("done", ["a.png"]))
         self.assertEqual(job.read()[0], "shooting ['top']\n")
 
+    def test_failure_reports_leftovers(self):
+        marks = []
+
+        def watch():
+            marks.append("mark")
+            return lambda: "note: 2 new timeline items\n"
+
+        self.s = Session(lambda: {}, watch=watch)
+        ok = self.run_job(script="print('fine')")
+        self.assertEqual(ok.read()[0], "fine\n")
+        bad = self.run_job(script="1/0")
+        self.assertEqual(marks, ["mark", "mark"])
+        self.assertTrue(bad.error.endswith("note: 2 new timeline items\n"))
+        self.assertIn("note: 2 new timeline items", bad.read()[0])
+        self.run_job("reset")
+        self.assertEqual(len(marks), 2)
+
+    def test_leftover_check_that_fails_is_reported(self):
+        def broken():
+            raise RuntimeError("gone")
+        self.s = Session(lambda: {}, watch=lambda: broken)
+        job = self.run_job(script="def run(c):\n    yield\n    1/0\n")
+        self.assertIn("ZeroDivisionError", job.error)
+        self.assertIn("could not check what the job left behind: RuntimeError: gone", job.error)
+
     def test_reload_dt(self):
         self.s = Session(lambda: {}, reload_dt=lambda: "DT")
         self.assertEqual(self.run_job(script="print(dt)").read()[0], "DT\n")

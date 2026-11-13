@@ -110,11 +110,22 @@ class ServerTest(unittest.TestCase):
         _, r = call(self.port, "POST", "/reset", {})
         shot = self.b.queue.get(s["id"])
         self.assertEqual(shot.kind, "shot")
-        self.assertEqual(shot.payload, {"views": ["top", "front"], "width": 1600,
-                                        "height": 1000, "dir": "C:/x"})
+        self.assertEqual(shot.payload, {"views": ["top", "front"], "width": 1024,
+                                        "height": 640, "dir": "C:/x"})
         self.assertEqual(self.b.queue.get(r["id"]).kind, "reset")
         code, d = call(self.port, "POST", "/screenshot", {"views": []})
         self.assertEqual(code, 400)
+
+    def test_screenshot_section(self):
+        self.b.hold.clear()
+        _, s = call(self.port, "POST", "/screenshot", {"views": ["top"], "dir": "C:/x",
+                                                       "section": "y=-2.5", "flip": True})
+        payload = self.b.queue.get(s["id"]).payload
+        self.assertEqual((payload["section"], payload["flip"]), ("y=-2.5", True))
+        for bad in ("w=1", "y=", 3, "y=1 mm"):
+            code, d = call(self.port, "POST", "/screenshot", {"views": ["top"], "section": bad})
+            self.assertEqual(code, 400, bad)
+            self.assertIn("section", d["error"])
 
 
 if __name__ == "__main__":
